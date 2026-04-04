@@ -1,6 +1,7 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { createPost } from "../models/postModel.js";
+import { createComment } from "../models/commentModel.js";
 import {
   validatePostContent,
   validateImageUrl,
@@ -9,6 +10,13 @@ import {
 } from "../utils/validators.js";
 
 const ALLOWED_REACTIONS = ["like", "meh", "dislike"];
+
+function makeError(code, field, message) {
+  const error = new Error(message);
+  error.code = code;
+  error.field = field;
+  return error;
+}
 
 export function getPosts() {
   const posts = storage.get(STORAGE_KEYS.POSTS, []);
@@ -49,13 +57,13 @@ export function updatePost({
   const postIndex = posts.findIndex((post) => post.id === postId);
 
   if (postIndex === -1) {
-    throw new Error("Post not found.");
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
   }
 
   const existingPost = posts[postIndex];
 
   if (existingPost.userId !== userId) {
-    throw new Error("You can only edit your own post.");
+    throw makeError("POST_EDIT_FORBIDDEN", null, "You can only edit your own post.");
   }
 
   const updatedPost = {
@@ -80,11 +88,11 @@ export function deletePost({ postId, userId }) {
   const targetPost = posts.find((post) => post.id === postId);
 
   if (!targetPost) {
-    throw new Error("Post not found.");
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
   }
 
   if (targetPost.userId !== userId) {
-    throw new Error("You can only delete your own post.");
+    throw makeError("POST_DELETE_FORBIDDEN", null, "You can only delete your own post.");
   }
 
   const nextPosts = posts.filter((post) => post.id !== postId);
@@ -93,16 +101,146 @@ export function deletePost({ postId, userId }) {
   return true;
 }
 
+export function addCommentToPost({
+  postId,
+  userId,
+  parentId = null,
+  content,
+  voiceNote = null
+}) {
+  const posts = storage.get(STORAGE_KEYS.POSTS, []);
+  const postIndex = posts.findIndex((post) => post.id === postId);
+
+  if (postIndex === -1) {
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
+  }
+
+  const post = posts[postIndex];
+  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
+
+  if (parentId !== null) {
+    const parentExists = comments.some((comment) => comment.id === parentId);
+
+    if (!parentExists) {
+      throw makeError("COMMENT_PARENT_NOT_FOUND", null, "Parent comment not found.");
+    }
+  }
+
+  const comment = createComment({
+    postId,
+    userId,
+    parentId,
+    content,
+    voiceNote
+  });
+
+  posts[postIndex] = {
+    ...post,
+    comments: [...comments, comment]
+  };
+
+  savePosts(posts);
+  return comment;
+}
+
+export function updateCommentInPost({ postId, commentId, userId, content }) {
+  const posts = storage.get(STORAGE_KEYS.POSTS, []);
+  const postIndex = posts.findIndex((post) => post.id === postId);
+
+  if (postIndex === -1) {
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
+  }
+
+  const post = posts[postIndex];
+  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
+  const commentIndex = comments.findIndex((comment) => comment.id === commentId);
+
+  if (commentIndex === -1) {
+    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
+  }
+
+  const existingComment = comments[commentIndex];
+
+  if (existingComment.userId !== userId) {
+    throw makeError(
+      "COMMENT_EDIT_FORBIDDEN",
+      null,
+      "You can only edit your own comment."
+    );
+  }
+
+  comments[commentIndex] = {
+    ...existingComment,
+    content: validatePostContent(content),
+    updatedAt: new Date().toISOString()
+  };
+
+  posts[postIndex] = {
+    ...post,
+    comments
+  };
+
+  savePosts(posts);
+  return comments[commentIndex];
+}
+
+export function deleteCommentFromPost({ postId, commentId, userId }) {
+  const posts = storage.get(STORAGE_KEYS.POSTS, []);
+  const postIndex = posts.findIndex((post) => post.id === postId);
+
+  if (postIndex === -1) {
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
+  }
+
+  const post = posts[postIndex];
+  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
+  const targetComment = comments.find((comment) => comment.id === commentId);
+
+  if (!targetComment) {
+    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
+  }
+
+  if (targetComment.userId !== userId) {
+    throw makeError(
+      "COMMENT_DELETE_FORBIDDEN",
+      null,
+      "You can only delete your own comment."
+    );
+  }
+
+  const commentIdsToDelete = collectCommentBranchIds(comments, commentId);
+
+  posts[postIndex] = {
+    ...post,
+    comments: comments.filter((comment) => !commentIdsToDelete.has(comment.id))
+  };
+
+  savePosts(posts);
+  return true;
+}
+
+export function getCommentsForPost(postOrId) {
+  const postId = typeof postOrId === "string" ? postOrId : postOrId?.id;
+
+  if (!postId) {
+    return [];
+  }
+
+  const post = getPostById(postId);
+  if (!post) return [];
+  return Array.isArray(post.comments) ? post.comments : [];
+}
+
 export function setPostReaction({ postId, userId, reactionType }) {
   if (!ALLOWED_REACTIONS.includes(reactionType)) {
-    throw new Error("Invalid reaction type.");
+    throw makeError("REACTION_INVALID", null, "Invalid reaction type.");
   }
 
   const posts = storage.get(STORAGE_KEYS.POSTS, []);
   const postIndex = posts.findIndex((post) => post.id === postId);
 
   if (postIndex === -1) {
-    throw new Error("Post not found.");
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
   }
 
   const post = posts[postIndex];
@@ -141,4 +279,22 @@ export function getUserReaction(post, userId) {
   if (post.reactions.dislike?.includes(userId)) return "dislike";
 
   return null;
+}
+
+function collectCommentBranchIds(comments, rootCommentId) {
+  const ids = new Set([rootCommentId]);
+  let foundNewChild = true;
+
+  while (foundNewChild) {
+    foundNewChild = false;
+
+    comments.forEach((comment) => {
+      if (comment.parentId && ids.has(comment.parentId) && !ids.has(comment.id)) {
+        ids.add(comment.id);
+        foundNewChild = true;
+      }
+    });
+  }
+
+  return ids;
 }

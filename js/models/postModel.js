@@ -24,6 +24,8 @@ export function createPost({ userId, content, image = "", location }) {
       meh: [],
       dislike: []
     },
-    createdAt: new Date().toISOString()
+    comments: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: null
   };
 }
