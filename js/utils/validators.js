@@ -298,6 +298,60 @@ export function validatePostContent(value) {
   return normalized;
 }
 
+export function validateCommentSubmission({ content = "", voiceNote = null, mode = null }) {
+  const hasVoiceNote = Boolean(voiceNote?.dataUrl);
+  const normalizedContent = normalizePostContent(content || "");
+  const hasText = Boolean(normalizedContent);
+
+  if (mode === "voice") {
+    if (!hasVoiceNote) {
+      throw makeError(
+        "COMMENT_VOICE_REQUIRED",
+        "content",
+        "Record a voice note before posting."
+      );
+    }
+
+    return {
+      content: "",
+      voiceNote
+    };
+  }
+
+  if (mode === "text") {
+    return {
+      content: validatePostContent(content),
+      voiceNote: null
+    };
+  }
+
+  if (hasText && hasVoiceNote) {
+    throw makeError(
+      "COMMENT_MODE_CONFLICT",
+      "content",
+      "Choose text or voice note, not both."
+    );
+  }
+
+  if (!hasText && !hasVoiceNote) {
+    throw makeError(
+      "COMMENT_BODY_REQUIRED",
+      "content",
+      "Add text or record a voice note."
+    );
+  }
+
+  return hasText
+    ? {
+        content: validatePostContent(content),
+        voiceNote: null
+      }
+    : {
+        content: "",
+        voiceNote
+      };
+}
+
 export function validateImageUrl(value) {
   const trimmed = value.trim();
 

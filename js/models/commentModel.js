@@ -1,4 +1,5 @@
-import { validatePostContent } from "../utils/validators.js";
+import { validateCommentSubmission } from "../utils/validators.js";
+import { normalizeVoiceNote } from "../utils/voiceNotes.js";
 
 export function createComment({
   postId,
@@ -19,18 +20,23 @@ export function createComment({
     throw new Error("parentId must be null or a valid comment id.");
   }
 
+  const validatedComment = validateCommentSubmission({
+    content,
+    voiceNote
+  });
+
   return {
     id: crypto.randomUUID(),
     postId,
     userId,
     parentId,
-    content: validatePostContent(content),
+    content: validatedComment.content,
     reactions: {
       like: [],
       meh: [],
       dislike: []
     },
-    voiceNote,
+    voiceNote: normalizeVoiceNote(validatedComment.voiceNote),
     createdAt: new Date().toISOString(),
     updatedAt: null
   };

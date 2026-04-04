@@ -472,6 +472,12 @@ body {
   color: #6b7280;
 }
 
+.comment-form-note {
+  margin: -2px 0 0;
+  font-size: 12px;
+  color: #1d4ed8;
+}
+
 .form-actions {
   display: flex;
   gap: 10px;
@@ -651,6 +657,30 @@ body {
   flex-wrap: wrap;
 }
 
+.comments-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.comments-sort-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.comments-sort-select {
+  min-width: 144px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
 .comments-title {
   margin: 0;
   font-size: 16px;
@@ -714,6 +744,150 @@ body {
 .comment-form {
   display: grid;
   gap: 10px;
+}
+
+.comment-mode-switch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.comment-mode-btn {
+  border-radius: 999px;
+}
+
+.comment-mode-btn-active {
+  background: #111827;
+  color: #ffffff;
+}
+
+.voice-note-composer {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+}
+
+.voice-note-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-note-btn {
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+
+.voice-note-icon-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.voice-note-clear-btn {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.voice-note-meter {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+}
+
+.voice-note-indicator {
+  font-size: 18px;
+  filter: grayscale(1);
+  opacity: 0.7;
+  transition: opacity 0.2s ease, transform 0.2s ease, filter 0.2s ease;
+}
+
+.voice-note-meter-recording .voice-note-indicator {
+  filter: grayscale(0);
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+.voice-note-meter-playing .voice-note-indicator {
+  filter: grayscale(0);
+  opacity: 1;
+}
+
+.voice-note-waveform {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.voice-note-wave-bar {
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #93c5fd, #2563eb);
+  opacity: 0.4;
+  transform-origin: center bottom;
+  transition: transform 90ms linear, opacity 90ms linear, background 90ms linear;
+}
+
+.voice-note-wave-bar-past {
+  background: linear-gradient(180deg, #38bdf8, #1d4ed8);
+}
+
+.voice-note-status {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.voice-note-timer {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1d4ed8;
+  white-space: nowrap;
+}
+
+.comment-voice-note {
+  display: grid;
+  gap: 8px;
+}
+
+.voice-note-progress-line {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: #0f172a;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: left 90ms linear, opacity 120ms ease;
+}
+
+.voice-note-audio,
+.comment-voice-audio {
+  width: 100%;
+  max-width: 320px;
+  display: none;
 }
 
 .comment-textarea {

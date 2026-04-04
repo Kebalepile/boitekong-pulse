@@ -1,4 +1,4 @@
-export function buildCommentTree(comments) {
+export function buildCommentTree(comments, sortOrder = "oldest") {
   const byId = new Map();
   const roots = [];
 
@@ -17,17 +17,21 @@ export function buildCommentTree(comments) {
     }
   });
 
-  return sortCommentNodes(roots);
+  return sortCommentNodes(roots, sortOrder);
 }
 
 function sortByCreatedAtAsc(a, b) {
   return new Date(a.createdAt) - new Date(b.createdAt);
 }
 
-function sortCommentNodes(nodes) {
-  nodes.sort(sortByCreatedAtAsc);
+function sortByCreatedAtDesc(a, b) {
+  return new Date(b.createdAt) - new Date(a.createdAt);
+}
+
+function sortCommentNodes(nodes, sortOrder) {
+  nodes.sort(sortOrder === "newest" ? sortByCreatedAtDesc : sortByCreatedAtAsc);
   nodes.forEach((node) => {
-    sortCommentNodes(node.children);
+    sortCommentNodes(node.children, sortOrder);
   });
 
   return nodes;

@@ -16,16 +16,29 @@ import { showConfirmDialog } from "./confirmDialog.js";
 import { createCommentCard } from "./commentCard.js";
 import { findUserById } from "../services/userService.js";
 import { buildCommentTree } from "../utils/commentTree.js";
-import { validatePostContent } from "../utils/validators.js";
+import { validateCommentSubmission } from "../utils/validators.js";
+import {
+  getVoiceNoteFeatureStatus,
+  startVoiceNoteRecording,
+  formatVoiceNoteDuration,
+  MAX_VOICE_NOTE_DURATION_MS,
+  configureVoiceNoteAudio
+} from "../utils/voiceNotes.js";
+import { createVoiceNoteVisualizer } from "../utils/voiceNoteVisualizer.js";
 
 const POST_PREVIEW_LENGTH = 300;
+const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
+const voiceNoteChoiceText = voiceNoteFeatureStatus.supported
+  ? "Choose text or voice note."
+  : voiceNoteFeatureStatus.message;
 
 const commentUiState = {
   openPanels: new Set(),
   openCommentForms: new Set(),
   openReplyForms: new Set(),
   openReplyLists: new Set(),
-  openEditForms: new Set()
+  openEditForms: new Set(),
+  sortOrders: new Map()
 };
 
 export function createPostCard(post, author, currentUserId, onReactionChange) {
@@ -189,7 +202,8 @@ function createReactionBar({ reactions, activeReaction, onReact, compact = false
 function createCommentsSection(post, currentUserId, onReactionChange) {
   const section = createElement("section", { className: "comments-section" });
   const comments = getCommentsForPost(post.id);
-  const commentTree = buildCommentTree(comments);
+  const sortOrder = commentUiState.sortOrders.get(post.id) || "oldest";
+  const commentTree = buildCommentTree(comments, sortOrder);
   const panelIsOpen = commentUiState.openPanels.has(post.id);
   const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
 
@@ -205,6 +219,44 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     text: getCommentsToggleLabel(panelIsOpen, comments.length)
   });
 
+  const controls = createElement("div", { className: "comments-header-controls" });
+  controls.appendChild(toggleBtn);
+
+  if (comments.length > 0) {
+    const sortLabel = createElement("label", {
+      className: "comments-sort-label",
+      text: "Sort"
+    });
+    const sortSelect = createElement("select", {
+      className: "form-input comments-sort-select",
+      attributes: {
+        "aria-label": `Sort comments for post ${post.id}`
+      }
+    });
+
+    [
+      { value: "oldest", label: "Oldest first" },
+      { value: "newest", label: "Newest first" }
+    ].forEach(({ value, label }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = sortOrder === value;
+      sortSelect.appendChild(option);
+    });
+
+    sortSelect.addEventListener("change", () => {
+      commentUiState.sortOrders.set(post.id, sortSelect.value);
+
+      if (typeof onReactionChange === "function") {
+        onReactionChange();
+      }
+    });
+
+    sortLabel.appendChild(sortSelect);
+    controls.appendChild(sortLabel);
+  }
+
   const panel = createElement("div", { className: "comments-panel" });
   setToggleDisplay(panel, panelIsOpen);
 
@@ -212,7 +264,7 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
   const composerToggleBtn = createElement("button", {
     className: "secondary-btn comments-composer-btn",
     type: "button",
-    text: commentFormIsOpen ? "Hide comment box" : "Comment"
+    text: commentFormIsOpen ? "Hide comment box" : "Add comment"
   });
 
   let topLevelForm;
@@ -220,21 +272,23 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     inputId: `comment-input-${post.id}`,
     placeholder: "Write a comment...",
     helperText: "Join the conversation on this post.",
+    noteText: voiceNoteChoiceText,
     submitText: "Post comment",
+    allowVoiceNote: true,
     cancelText: "Cancel",
     onCancel: () => {
       commentUiState.openCommentForms.delete(post.id);
       resetCommentForm(topLevelForm);
       setToggleDisplay(topLevelForm, false);
-      composerToggleBtn.textContent = "Comment";
+      composerToggleBtn.textContent = "Add comment";
     },
-    onSubmit: (safeContent) =>
+    onSubmit: ({ content, voiceNote }) =>
       addCommentToPost({
         postId: post.id,
         userId: currentUserId,
         parentId: null,
-        content: safeContent,
-        voiceNote: null
+        content,
+        voiceNote
       }),
     onSuccess: () => {
       commentUiState.openPanels.add(post.id);
@@ -285,7 +339,7 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
       commentUiState.openCommentForms.delete(post.id);
       resetCommentForm(topLevelForm);
       setToggleDisplay(topLevelForm, false);
-      composerToggleBtn.textContent = "Comment";
+      composerToggleBtn.textContent = "Add comment";
     }
   });
 
@@ -293,7 +347,7 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     const nextOpen = topLevelForm.style.display === "none";
 
     setToggleDisplay(topLevelForm, nextOpen);
-    composerToggleBtn.textContent = nextOpen ? "Hide comment box" : "Comment";
+    composerToggleBtn.textContent = nextOpen ? "Hide comment box" : "Add comment";
 
     if (nextOpen) {
       commentUiState.openCommentForms.add(post.id);
@@ -304,7 +358,7 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     }
   });
 
-  header.append(heading, toggleBtn);
+  header.append(heading, controls);
   panel.append(composerActions, topLevelForm, commentsList);
   section.append(header, panel);
 
@@ -317,6 +371,8 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
 
   const author = findUserById(node.userId);
   const isOwner = node.userId === currentUserId;
+  const isVoiceNoteOnly = Boolean(node.voiceNote?.dataUrl);
+  const canEditComment = isOwner && !isVoiceNoteOnly;
   const replyFormIsOpen = commentUiState.openReplyForms.has(node.id);
   const repliesListIsOpen = commentUiState.openReplyLists.has(node.id);
   const editFormIsOpen = commentUiState.openEditForms.has(node.id);
@@ -326,21 +382,23 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
     inputId: `reply-input-${node.id}`,
     placeholder: `Reply to ${author?.username || "this comment"}...`,
     helperText: "Your reply will be saved under this comment.",
+    noteText: voiceNoteChoiceText,
     submitText: "Post reply",
     compact: true,
+    allowVoiceNote: true,
     cancelText: "Cancel",
     onCancel: () => {
       commentUiState.openReplyForms.delete(node.id);
       resetCommentForm(replyForm);
       setToggleDisplay(replyForm, false);
     },
-    onSubmit: (safeContent) =>
+    onSubmit: ({ content, voiceNote }) =>
       addCommentToPost({
         postId,
         userId: currentUserId,
         parentId: node.id,
-        content: safeContent,
-        voiceNote: null
+        content,
+        voiceNote
       }),
     onSuccess: () => {
       commentUiState.openReplyForms.delete(node.id);
@@ -353,34 +411,38 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
   });
   setToggleDisplay(replyForm, replyFormIsOpen);
 
-  const editForm = createCommentForm({
-    inputId: `edit-comment-input-${node.id}`,
-    placeholder: "Update your comment...",
-    helperText: "Save when you are happy with your wording.",
-    submitText: "Save",
-    compact: true,
-    initialValue: node.content,
-    cancelText: "Cancel",
-    onCancel: () => {
-      commentUiState.openEditForms.delete(node.id);
-      setToggleDisplay(editForm, false);
-    },
-    onSubmit: (safeContent) =>
-      updateCommentInPost({
-        postId,
-        commentId: node.id,
-        userId: currentUserId,
-        content: safeContent
-      }),
-    onSuccess: () => {
-      commentUiState.openEditForms.delete(node.id);
+  let editForm = null;
 
-      if (typeof onCommentChange === "function") {
-        onCommentChange();
+  if (canEditComment) {
+    editForm = createCommentForm({
+      inputId: `edit-comment-input-${node.id}`,
+      placeholder: "Update your comment...",
+      helperText: "Save when you are happy with your wording.",
+      submitText: "Save",
+      compact: true,
+      initialValue: node.content,
+      cancelText: "Cancel",
+      onCancel: () => {
+        commentUiState.openEditForms.delete(node.id);
+        setToggleDisplay(editForm, false);
+      },
+      onSubmit: ({ content }) =>
+        updateCommentInPost({
+          postId,
+          commentId: node.id,
+          userId: currentUserId,
+          content
+        }),
+      onSuccess: () => {
+        commentUiState.openEditForms.delete(node.id);
+
+        if (typeof onCommentChange === "function") {
+          onCommentChange();
+        }
       }
-    }
-  });
-  setToggleDisplay(editForm, editFormIsOpen);
+    });
+    setToggleDisplay(editForm, editFormIsOpen);
+  }
 
   const repliesList = createElement("div", { className: "comment-children" });
   setToggleDisplay(repliesList, repliesListIsOpen);
@@ -424,7 +486,9 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
     reactionBar,
     onReply: () => {
       commentUiState.openEditForms.delete(node.id);
-      setToggleDisplay(editForm, false);
+      if (editForm) {
+        setToggleDisplay(editForm, false);
+      }
 
       const nextOpen = replyForm.style.display === "none";
       setToggleDisplay(replyForm, nextOpen);
@@ -450,7 +514,7 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
             }
           }
         : null,
-    onEdit: isOwner
+    onEdit: canEditComment
       ? () => {
           commentUiState.openReplyForms.delete(node.id);
           setToggleDisplay(replyForm, false);
@@ -499,7 +563,13 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
       : null
   });
 
-  thread.append(commentCard, editForm, replyForm);
+  thread.append(commentCard);
+
+  if (editForm) {
+    thread.appendChild(editForm);
+  }
+
+  thread.appendChild(replyForm);
 
   if (node.children.length > 0) {
     thread.appendChild(repliesList);
@@ -512,10 +582,12 @@ function createCommentForm({
   inputId,
   placeholder,
   helperText,
+  noteText = "",
   submitText,
   onSubmit,
   onSuccess,
   compact = false,
+  allowVoiceNote = false,
   initialValue = "",
   cancelText = "",
   onCancel = null
@@ -525,6 +597,9 @@ function createCommentForm({
   });
 
   const inputWrapper = createElement("div", { className: "field-group" });
+  const hasVoiceMode = allowVoiceNote && voiceNoteFeatureStatus.supported;
+  let submissionMode = "text";
+  let submitBtn = null;
   const textarea = document.createElement("textarea");
   textarea.className = `form-input comment-textarea${compact ? " comment-textarea-reply" : ""}`;
   textarea.placeholder = placeholder;
@@ -532,14 +607,436 @@ function createCommentForm({
   textarea.maxLength = 1000;
   textarea.id = inputId;
   textarea.value = initialValue;
+  const textModeFields = createElement("div", { className: "comment-input-mode-panel" });
 
   const helper = createElement("p", {
     className: "field-helper",
     text: helperText
   });
+  const note = noteText
+    ? createElement("p", {
+        className: "comment-form-note",
+        text: noteText
+      })
+    : null;
 
   const error = createFieldError(inputId);
   const actions = createElement("div", { className: "comment-form-actions" });
+  let modeSwitch = null;
+  let textModeBtn = null;
+  let voiceModeBtn = null;
+  let voiceNoteComposer = null;
+  let voiceNoteDraft = null;
+  let voiceNoteRecorder = null;
+  let recordingTimerId = null;
+  let recordingStartedAt = 0;
+
+  const clearRecordingTimer = () => {
+    if (recordingTimerId) {
+      window.clearInterval(recordingTimerId);
+      recordingTimerId = null;
+    }
+  };
+
+  let voiceNoteStatus = null;
+  let voiceNoteTimer = null;
+  let voiceNoteAudio = null;
+  let voiceNotePrimaryBtn = null;
+  let voiceNoteStopBtn = null;
+  let voiceNoteClearBtn = null;
+  let voiceNoteMeter = null;
+  let voiceNoteWaveform = null;
+  let voiceNoteProgressLine = null;
+  let voiceNoteVisualizer = null;
+  let voiceNoteLiveSession = null;
+
+  const updateVoiceNoteComposer = () => {
+    if (!voiceNoteStatus) {
+      return;
+    }
+
+    const isRecording = Boolean(voiceNoteRecorder);
+    const hasVoiceNote = Boolean(voiceNoteDraft?.dataUrl);
+    const isPreviewPlaying = Boolean(
+      voiceNoteAudio && !voiceNoteAudio.paused && !voiceNoteAudio.ended
+    );
+    const maxDurationLabel = `${formatVoiceNoteDuration(MAX_VOICE_NOTE_DURATION_MS)} minute`;
+
+    voiceNotePrimaryBtn.disabled = submissionMode !== "voice" || isRecording;
+    voiceNoteStopBtn.disabled =
+      submissionMode !== "voice" || (!isRecording && !isPreviewPlaying);
+    voiceNoteClearBtn.disabled =
+      submissionMode !== "voice" || (!isRecording && !hasVoiceNote);
+
+    if (submitBtn) {
+      submitBtn.disabled = isRecording;
+    }
+
+    if (voiceNoteAudio) {
+      configureVoiceNoteAudio(voiceNoteAudio, hasVoiceNote ? voiceNoteDraft.dataUrl : "");
+    }
+
+    if (voiceNoteMeter) {
+      voiceNoteMeter.classList.toggle("voice-note-meter-recording", isRecording);
+      voiceNoteMeter.classList.toggle("voice-note-meter-playing", isPreviewPlaying);
+    }
+
+    if (voiceNotePrimaryBtn) {
+      const primaryConfig = hasVoiceNote
+        ? isPreviewPlaying
+          ? {
+              text: "\u23F8",
+              label: "Pause voice note preview"
+            }
+          : {
+              text: "\u25B6",
+              label: "Play voice note preview"
+            }
+        : {
+            text: "\u{1F3A4}",
+            label: "Record voice note"
+          };
+
+      voiceNotePrimaryBtn.textContent = primaryConfig.text;
+      voiceNotePrimaryBtn.setAttribute("aria-label", primaryConfig.label);
+      voiceNotePrimaryBtn.title = primaryConfig.label;
+    }
+
+    if (submissionMode !== "voice") {
+      voiceNoteStatus.textContent = "\u{1F3A4} Switch to voice note mode to record.";
+      if (voiceNoteTimer) {
+        voiceNoteTimer.textContent = `Max ${maxDurationLabel}`;
+      }
+      return;
+    }
+
+    if (isRecording) {
+      const elapsedMs = Math.min(Date.now() - recordingStartedAt, MAX_VOICE_NOTE_DURATION_MS);
+      voiceNoteStatus.textContent = "\u{1F534} Recording voice note...";
+      if (voiceNoteTimer) {
+        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(elapsedMs)} / Max ${maxDurationLabel}`;
+      }
+      return;
+    }
+
+    if (hasVoiceNote && isPreviewPlaying) {
+      voiceNoteStatus.textContent = "\u{1F50A} Playing preview...";
+      if (voiceNoteTimer) {
+        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(voiceNoteAudio.currentTime * 1000)} / ${formatVoiceNoteDuration(voiceNoteDraft.durationMs)}`;
+      }
+      return;
+    }
+
+    if (hasVoiceNote) {
+      voiceNoteStatus.textContent = "\u{1F50A} Preview your voice note before posting.";
+      if (voiceNoteTimer) {
+        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(voiceNoteDraft.durationMs)} recorded`;
+      }
+      return;
+    }
+
+    voiceNoteStatus.textContent = "\u{1F3A4} Ready to record a voice note.";
+    if (voiceNoteTimer) {
+      voiceNoteTimer.textContent = `Max ${maxDurationLabel}`;
+    }
+  };
+
+  const syncVoiceNotePreview = () => {
+    if (!voiceNoteVisualizer) {
+      return;
+    }
+
+    const progressRatio =
+      voiceNoteDraft?.durationMs && voiceNoteAudio
+        ? Math.min(
+            (voiceNoteAudio.currentTime * 1000) / voiceNoteDraft.durationMs,
+            1
+          )
+        : 0;
+
+    voiceNoteVisualizer.renderStoredWaveform({
+      waveform: voiceNoteDraft?.waveform,
+      progressRatio
+    });
+    updateVoiceNoteComposer();
+  };
+
+  const stopVoiceNotePreview = () => {
+    if (!voiceNoteAudio) {
+      return;
+    }
+
+    voiceNoteAudio.pause();
+    voiceNoteAudio.currentTime = 0;
+    syncVoiceNotePreview();
+  };
+
+  const clearVoiceNoteComposer = () => {
+    clearRecordingTimer();
+
+    if (voiceNoteRecorder) {
+      voiceNoteRecorder.cancel();
+      voiceNoteRecorder = null;
+    }
+
+    if (voiceNoteLiveSession) {
+      voiceNoteLiveSession.cancel();
+      voiceNoteLiveSession = null;
+    }
+
+    stopVoiceNotePreview();
+
+    voiceNoteDraft = null;
+
+    if (voiceNoteVisualizer) {
+      voiceNoteVisualizer.renderStoredWaveform({
+        waveform: [],
+        progressRatio: 0
+      });
+    }
+
+    updateVoiceNoteComposer();
+  };
+
+  const updateSubmissionMode = (nextMode) => {
+    submissionMode = nextMode;
+
+    if (modeSwitch) {
+      textModeBtn.className =
+        submissionMode === "text"
+          ? "secondary-btn comment-mode-btn comment-mode-btn-active"
+          : "secondary-btn comment-mode-btn";
+      voiceModeBtn.className =
+        submissionMode === "voice"
+          ? "secondary-btn comment-mode-btn comment-mode-btn-active"
+          : "secondary-btn comment-mode-btn";
+    }
+
+    const isTextMode = submissionMode === "text";
+
+    if (isTextMode) {
+      clearVoiceNoteComposer();
+    }
+
+    setToggleDisplay(textModeFields, isTextMode);
+    textarea.disabled = !isTextMode;
+    textarea.required = isTextMode;
+
+    if (voiceNoteComposer) {
+      setToggleDisplay(voiceNoteComposer, !isTextMode);
+    }
+
+    if (submitBtn) {
+      submitBtn.textContent = submissionMode === "voice" ? "Post voice note" : submitText;
+    }
+
+    updateVoiceNoteComposer();
+  };
+
+  if (hasVoiceMode) {
+    modeSwitch = createElement("div", { className: "comment-mode-switch" });
+    textModeBtn = createElement("button", {
+      className: "secondary-btn comment-mode-btn",
+      type: "button",
+      text: "Text"
+    });
+    voiceModeBtn = createElement("button", {
+      className: "secondary-btn comment-mode-btn",
+      type: "button",
+      text: "Voice note"
+    });
+
+    textModeBtn.addEventListener("click", () => {
+      clearFormErrors(form);
+      updateSubmissionMode("text");
+      textarea.focus();
+    });
+
+    voiceModeBtn.addEventListener("click", () => {
+      clearFormErrors(form);
+      updateSubmissionMode("voice");
+    });
+
+    modeSwitch.append(textModeBtn, voiceModeBtn);
+  }
+
+  if (hasVoiceMode) {
+    voiceNoteComposer = createElement("div", {
+      className: "voice-note-composer"
+    });
+    const voiceNoteControls = createElement("div", {
+      className: "voice-note-controls"
+    });
+
+    voiceNotePrimaryBtn = createElement("button", {
+      className: "secondary-btn voice-note-btn voice-note-icon-btn",
+      type: "button",
+      text: "\u{1F3A4}",
+      attributes: {
+        "aria-label": "Record voice note",
+        title: "Record voice note"
+      }
+    });
+
+    voiceNoteStopBtn = createElement("button", {
+      className: "secondary-btn voice-note-btn voice-note-icon-btn",
+      type: "button",
+      text: "\u25A0",
+      attributes: {
+        "aria-label": "Stop voice note",
+        title: "Stop voice note"
+      }
+    });
+
+    voiceNoteClearBtn = createElement("button", {
+      className: "secondary-btn voice-note-btn voice-note-icon-btn voice-note-clear-btn",
+      type: "button",
+      text: "\u{1F5D1}",
+      attributes: {
+        "aria-label": "Clear voice note",
+        title: "Clear voice note"
+      }
+    });
+
+    voiceNoteStatus = createElement("p", {
+      className: "voice-note-status"
+    });
+    voiceNoteTimer = createElement("p", {
+      className: "voice-note-timer"
+    });
+    voiceNoteMeter = createElement("div", {
+      className: "voice-note-meter"
+    });
+    const voiceNoteIndicator = createElement("span", {
+      className: "voice-note-indicator",
+      text: "\u{1F399}"
+    });
+    voiceNoteWaveform = createElement("div", {
+      className: "voice-note-waveform"
+    });
+    voiceNoteProgressLine = createElement("span", {
+      className: "voice-note-progress-line"
+    });
+    voiceNoteWaveform.appendChild(voiceNoteProgressLine);
+    voiceNoteVisualizer = createVoiceNoteVisualizer({
+      waveformElement: voiceNoteWaveform,
+      progressLineElement: voiceNoteProgressLine
+    });
+
+    voiceNoteMeter.append(voiceNoteIndicator, voiceNoteWaveform, voiceNoteTimer);
+
+    voiceNoteAudio = document.createElement("audio");
+    voiceNoteAudio.className = "voice-note-audio";
+    configureVoiceNoteAudio(voiceNoteAudio);
+    ["play", "pause", "ended", "timeupdate", "loadedmetadata"].forEach((eventName) => {
+      voiceNoteAudio.addEventListener(eventName, syncVoiceNotePreview);
+    });
+
+    const finalizeVoiceRecording = (nextVoiceNote) => {
+      clearRecordingTimer();
+
+      if (voiceNoteLiveSession) {
+        const waveform = voiceNoteLiveSession.stop();
+        voiceNoteLiveSession = null;
+        voiceNoteDraft = nextVoiceNote
+          ? {
+              ...nextVoiceNote,
+              waveform
+            }
+          : null;
+      } else {
+        voiceNoteDraft = nextVoiceNote;
+      }
+
+      voiceNoteRecorder = null;
+      stopVoiceNotePreview();
+      syncVoiceNotePreview();
+    };
+
+    voiceNotePrimaryBtn.addEventListener("click", async () => {
+      if (voiceNoteDraft?.dataUrl) {
+        try {
+          if (voiceNoteAudio.paused || voiceNoteAudio.ended) {
+            if (voiceNoteAudio.ended) {
+              voiceNoteAudio.currentTime = 0;
+            }
+
+            await voiceNoteAudio.play();
+          } else {
+            voiceNoteAudio.pause();
+          }
+        } catch (error) {
+          setFieldError(inputId, error.message || "Could not play voice note preview.");
+        }
+
+        syncVoiceNotePreview();
+        return;
+      }
+
+      if (voiceNoteRecorder) {
+        return;
+      }
+
+      clearFormErrors(form);
+
+      try {
+        voiceNoteDraft = null;
+        voiceNoteRecorder = await startVoiceNoteRecording();
+        voiceNoteLiveSession = await voiceNoteVisualizer.startRecording({
+          stream: voiceNoteRecorder.stream,
+          maxDurationMs: MAX_VOICE_NOTE_DURATION_MS
+        });
+        recordingStartedAt = Date.now();
+        clearRecordingTimer();
+        recordingTimerId = window.setInterval(updateVoiceNoteComposer, 250);
+        voiceNoteRecorder.result
+          .then((nextVoiceNote) => {
+            if (voiceNoteRecorder) {
+              finalizeVoiceRecording(nextVoiceNote);
+            }
+          })
+          .catch((error) => {
+            if (voiceNoteRecorder) {
+              clearRecordingTimer();
+              if (voiceNoteLiveSession) {
+                voiceNoteLiveSession.cancel();
+                voiceNoteLiveSession = null;
+              }
+              voiceNoteDraft = null;
+              voiceNoteRecorder = null;
+              setFieldError(inputId, error.message || "Voice note recording failed.");
+              syncVoiceNotePreview();
+            }
+          });
+        updateVoiceNoteComposer();
+      } catch (error) {
+        voiceNoteRecorder = null;
+        if (voiceNoteLiveSession) {
+          voiceNoteLiveSession.cancel();
+          voiceNoteLiveSession = null;
+        }
+        setFieldError(inputId, error.message || "Could not start voice recording.");
+      }
+    });
+
+    voiceNoteStopBtn.addEventListener("click", () => {
+      if (voiceNoteRecorder) {
+        voiceNoteRecorder.stop();
+        return;
+      }
+
+      if (voiceNoteDraft?.dataUrl) {
+        stopVoiceNotePreview();
+      }
+    });
+
+    voiceNoteClearBtn.addEventListener("click", () => {
+      clearVoiceNoteComposer();
+    });
+
+    voiceNoteControls.append(voiceNotePrimaryBtn, voiceNoteStopBtn, voiceNoteClearBtn);
+    voiceNoteComposer.append(voiceNoteControls, voiceNoteMeter, voiceNoteStatus, voiceNoteAudio);
+  }
 
   if (cancelText && typeof onCancel === "function") {
     const cancelBtn = createElement("button", {
@@ -552,15 +1049,40 @@ function createCommentForm({
     actions.appendChild(cancelBtn);
   }
 
-  const submitBtn = createElement("button", {
+  submitBtn = createElement("button", {
     className: "primary-btn",
     type: "submit",
     text: submitText
   });
   actions.appendChild(submitBtn);
 
-  inputWrapper.append(textarea, helper, error);
+  textModeFields.append(textarea, helper);
+
+  if (modeSwitch) {
+    inputWrapper.appendChild(modeSwitch);
+  }
+
+  inputWrapper.appendChild(textModeFields);
+
+  if (voiceNoteComposer) {
+    inputWrapper.appendChild(voiceNoteComposer);
+  }
+
+  if (note) {
+    inputWrapper.appendChild(note);
+  }
+
+  inputWrapper.appendChild(error);
   form.append(inputWrapper, actions);
+  form._resetCommentForm = () => {
+    submissionMode = "text";
+    textarea.value = initialValue;
+    clearFormErrors(form);
+    clearVoiceNoteComposer();
+    updateSubmissionMode("text");
+  };
+
+  updateSubmissionMode("text");
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -571,8 +1093,16 @@ function createCommentForm({
         throw new Error("Comment form submit handler is missing.");
       }
 
-      const safeContent = validatePostContent(textarea.value);
-      onSubmit(safeContent);
+      if (voiceNoteRecorder) {
+        throw new Error("Stop the voice note recording before posting.");
+      }
+
+      const safeComment = validateCommentSubmission({
+        content: textarea.value,
+        voiceNote: voiceNoteDraft,
+        mode: hasVoiceMode ? submissionMode : "text"
+      });
+      onSubmit(safeComment);
 
       if (typeof onSuccess === "function") {
         onSuccess();
@@ -600,6 +1130,11 @@ function setToggleDisplay(element, isVisible) {
 }
 
 function resetCommentForm(form, initialValue = "") {
+  if (typeof form?._resetCommentForm === "function") {
+    form._resetCommentForm();
+    return;
+  }
+
   const textarea = form?.querySelector("textarea");
 
   if (textarea) {
