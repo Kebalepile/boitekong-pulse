@@ -2,6 +2,8 @@ import { createElement, setFieldError, clearFormErrors, createFieldError } from 
 import {
   setPostReaction,
   getUserReaction,
+  setCommentReaction,
+  getCommentUserReaction,
   deletePost,
   addCommentToPost,
   getCommentsForPost,
@@ -16,7 +18,15 @@ import { findUserById } from "../services/userService.js";
 import { buildCommentTree } from "../utils/commentTree.js";
 import { validatePostContent } from "../utils/validators.js";
 
-const openCommentPanelPostIds = new Set();
+const POST_PREVIEW_LENGTH = 300;
+
+const commentUiState = {
+  openPanels: new Set(),
+  openCommentForms: new Set(),
+  openReplyForms: new Set(),
+  openReplyLists: new Set(),
+  openEditForms: new Set()
+};
 
 export function createPostCard(post, author, currentUserId, onReactionChange) {
   const card = createElement("article", { className: "post-card" });
@@ -29,89 +39,24 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
     text: author?.username || "Unknown User"
   });
 
-  const metaText = post.updatedAt
-    ? `${post.location.township} ${post.location.extension} · ${formatTimestamp(post.createdAt)} · Edited`
-    : `${post.location.township} ${post.location.extension} · ${formatTimestamp(post.createdAt)}`;
-
   const meta = createElement("p", {
     className: "post-meta",
-    text: metaText
+    text: formatPostMeta(post)
   });
 
   authorBlock.append(authorName, meta);
   header.appendChild(authorBlock);
 
   if (post.userId === currentUserId) {
-    const ownerActions = createElement("div", { className: "owner-actions" });
-
-    const editBtn = createElement("button", {
-      className: "owner-action-btn",
-      type: "button",
-      text: "Edit"
-    });
-
-    const deleteBtn = createElement("button", {
-      className: "owner-action-btn owner-action-danger",
-      type: "button",
-      text: "Delete"
-    });
-
-    editBtn.addEventListener("click", () => {
-      navigate("edit-post", { postId: post.id });
-    });
-
-    deleteBtn.addEventListener("click", () => {
-      showConfirmDialog({
-        title: "Delete post?",
-        message: "This post will be permanently removed.",
-        confirmText: "Delete",
-        cancelText: "Cancel",
-        danger: true,
-        onConfirm: () => {
-          try {
-            deletePost({
-              postId: post.id,
-              userId: currentUserId
-            });
-
-            showToast("Post deleted.", "success");
-
-            if (typeof onReactionChange === "function") {
-              onReactionChange();
-            }
-          } catch (error) {
-            showToast(error.message || "Failed to delete post.", "error");
-          }
-        }
-      });
-    });
-
-    ownerActions.append(editBtn, deleteBtn);
-    header.appendChild(ownerActions);
+    header.appendChild(createPostOwnerActions(post, currentUserId, onReactionChange));
   }
 
-  const content = createElement("p", {
-    className: "post-content",
-    text: post.content
-  });
+  const content = createPostContent(post);
 
   card.append(header, content);
 
   if (post.image) {
-    const imageWrapper = createElement("div", { className: "post-image-wrapper" });
-    const image = document.createElement("img");
-    image.className = "post-image";
-    image.src = post.image;
-    image.alt = "Post image";
-    image.loading = "lazy";
-    image.referrerPolicy = "no-referrer";
-
-    image.addEventListener("error", () => {
-      imageWrapper.remove();
-    });
-
-    imageWrapper.appendChild(image);
-    card.appendChild(imageWrapper);
+    card.appendChild(createPostImage(post.image));
   }
 
   const footer = createElement("div", { className: "post-card-footer" });
@@ -122,40 +67,116 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
 
   footer.appendChild(footerText);
 
-  const reactions = createReactionBar(post, currentUserId, onReactionChange);
-  const commentsSection = createCommentsSection(post, currentUserId, onReactionChange);
+  card.append(
+    footer,
+    createReactionBar({
+      reactions: post.reactions,
+      activeReaction: getUserReaction(post, currentUserId),
+      onReact: (reactionType) => {
+        setPostReaction({
+          postId: post.id,
+          userId: currentUserId,
+          reactionType
+        });
 
-  card.append(footer, reactions, commentsSection);
+        if (typeof onReactionChange === "function") {
+          onReactionChange();
+        }
+      }
+    }),
+    createCommentsSection(post, currentUserId, onReactionChange)
+  );
 
   return card;
 }
 
-function createReactionBar(post, currentUserId, onReactionChange) {
-  const wrapper = createElement("div", { className: "reaction-bar" });
-  const activeReaction = getUserReaction(post, currentUserId);
+function createPostOwnerActions(post, currentUserId, onReactionChange) {
+  const ownerActions = createElement("div", { className: "owner-actions" });
 
+  const editBtn = createElement("button", {
+    className: "owner-action-btn",
+    type: "button",
+    text: "\u270E Edit"
+  });
+
+  const deleteBtn = createElement("button", {
+    className: "owner-action-btn owner-action-danger",
+    type: "button",
+    text: "\u{1F5D1} Delete"
+  });
+
+  editBtn.addEventListener("click", () => {
+    navigate("edit-post", { postId: post.id });
+  });
+
+  deleteBtn.addEventListener("click", () => {
+    showConfirmDialog({
+      title: "Delete post?",
+      message: "This post will be permanently removed.",
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      danger: true,
+      onConfirm: () => {
+        try {
+          deletePost({
+            postId: post.id,
+            userId: currentUserId
+          });
+
+          showToast("Post deleted.", "success");
+
+          if (typeof onReactionChange === "function") {
+            onReactionChange();
+          }
+        } catch (error) {
+          showToast(error.message || "Failed to delete post.", "error");
+        }
+      }
+    });
+  });
+
+  ownerActions.append(editBtn, deleteBtn);
+  return ownerActions;
+}
+
+function createPostImage(imageUrl) {
+  const imageWrapper = createElement("div", { className: "post-image-wrapper" });
+  const image = document.createElement("img");
+
+  image.className = "post-image";
+  image.src = imageUrl;
+  image.alt = "Post image";
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+
+  image.addEventListener("error", () => {
+    imageWrapper.remove();
+  });
+
+  imageWrapper.appendChild(image);
+  return imageWrapper;
+}
+
+function createReactionBar({ reactions, activeReaction, onReact, compact = false }) {
+  const wrapper = createElement("div", {
+    className: `reaction-bar${compact ? " reaction-bar-compact" : ""}`
+  });
   const buttons = [
-    { type: "like", label: "👍 Like", count: post.reactions?.like?.length || 0 },
-    { type: "meh", label: "😐 Meh", count: post.reactions?.meh?.length || 0 },
-    { type: "dislike", label: "👎 Dislike", count: post.reactions?.dislike?.length || 0 }
+    { type: "like", emoji: "\u{1F44D}", label: "Like", count: reactions?.like?.length || 0 },
+    { type: "meh", emoji: "\u{1F610}", label: "Meh", count: reactions?.meh?.length || 0 },
+    { type: "dislike", emoji: "\u{1F44E}", label: "Dislike", count: reactions?.dislike?.length || 0 }
   ];
 
-  buttons.forEach(({ type, label, count }) => {
+  buttons.forEach(({ type, emoji, label, count }) => {
     const button = createElement("button", {
       className: `reaction-btn${activeReaction === type ? " reaction-btn-active" : ""}`,
       type: "button",
-      text: `${label} (${count})`
+      text: `${emoji} ${label} (${count})`
     });
 
     button.addEventListener("click", () => {
-      setPostReaction({
-        postId: post.id,
-        userId: currentUserId,
-        reactionType: type
-      });
-
-      if (typeof onReactionChange === "function") {
-        onReactionChange();
+      if (typeof onReact === "function") {
+        onReact(type);
       }
     });
 
@@ -169,60 +190,79 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
   const section = createElement("section", { className: "comments-section" });
   const comments = getCommentsForPost(post.id);
   const commentTree = buildCommentTree(comments);
-  const isPanelOpen = openCommentPanelPostIds.has(post.id);
-  const header = createElement("div", { className: "comments-header" });
+  const panelIsOpen = commentUiState.openPanels.has(post.id);
+  const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
 
+  const header = createElement("div", { className: "comments-header" });
   const heading = createElement("h4", {
     className: "comments-title",
     text: "Conversation"
   });
 
   const toggleBtn = createElement("button", {
-    className: `comment-toggle-btn${isPanelOpen ? " comment-toggle-btn-active" : ""}`,
+    className: `comment-toggle-btn${panelIsOpen ? " comment-toggle-btn-active" : ""}`,
     type: "button",
-    text: isPanelOpen ? `Hide comments (${comments.length})` : `Comments (${comments.length})`
+    text: getCommentsToggleLabel(panelIsOpen, comments.length)
   });
 
   const panel = createElement("div", { className: "comments-panel" });
-  panel.hidden = !isPanelOpen;
+  setToggleDisplay(panel, panelIsOpen);
 
-  const form = createCommentForm({
+  const composerActions = createElement("div", { className: "comments-composer-actions" });
+  const composerToggleBtn = createElement("button", {
+    className: "secondary-btn comments-composer-btn",
+    type: "button",
+    text: commentFormIsOpen ? "Hide comment box" : "Comment"
+  });
+
+  let topLevelForm;
+  topLevelForm = createCommentForm({
     inputId: `comment-input-${post.id}`,
     placeholder: "Write a comment...",
     helperText: "Join the conversation on this post.",
-    submitText: "Comment",
-    successMessage: "Comment added.",
-    onSubmitText: (content) =>
+    submitText: "Post comment",
+    cancelText: "Cancel",
+    onCancel: () => {
+      commentUiState.openCommentForms.delete(post.id);
+      resetCommentForm(topLevelForm);
+      setToggleDisplay(topLevelForm, false);
+      composerToggleBtn.textContent = "Comment";
+    },
+    onSubmit: (safeContent) =>
       addCommentToPost({
         postId: post.id,
         userId: currentUserId,
         parentId: null,
-        content,
+        content: safeContent,
         voiceNote: null
       }),
     onSuccess: () => {
-      openCommentPanelPostIds.add(post.id);
+      commentUiState.openPanels.add(post.id);
+      commentUiState.openCommentForms.delete(post.id);
 
       if (typeof onReactionChange === "function") {
         onReactionChange();
       }
     }
   });
+  setToggleDisplay(topLevelForm, commentFormIsOpen);
+  composerActions.appendChild(composerToggleBtn);
 
   const commentsList = createElement("div", { className: "comments-list" });
 
   if (commentTree.length === 0) {
-    const empty = createElement("p", {
-      className: "comments-empty",
-      text: "No comments yet. Start the conversation."
-    });
-    commentsList.appendChild(empty);
+    commentsList.appendChild(
+      createElement("p", {
+        className: "comments-empty",
+        text: "No comments yet. Start the conversation."
+      })
+    );
   } else {
     commentTree.forEach((commentNode) => {
       commentsList.appendChild(
-        createCommentThread({
+        createCommentNode({
           postId: post.id,
-          commentNode,
+          node: commentNode,
           currentUserId,
           onCommentChange: onReactionChange,
           depth: 0
@@ -232,81 +272,144 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
   }
 
   toggleBtn.addEventListener("click", () => {
-    const nextOpen = panel.hidden;
-    panel.hidden = !nextOpen;
+    const nextOpen = panel.style.display === "none";
+
+    setToggleDisplay(panel, nextOpen);
     toggleBtn.classList.toggle("comment-toggle-btn-active", nextOpen);
-    toggleBtn.textContent = nextOpen
-      ? `Hide comments (${comments.length})`
-      : `Comments (${comments.length})`;
+    toggleBtn.textContent = getCommentsToggleLabel(nextOpen, comments.length);
 
     if (nextOpen) {
-      openCommentPanelPostIds.add(post.id);
-      form.querySelector("textarea")?.focus();
+      commentUiState.openPanels.add(post.id);
     } else {
-      openCommentPanelPostIds.delete(post.id);
+      commentUiState.openPanels.delete(post.id);
+      commentUiState.openCommentForms.delete(post.id);
+      resetCommentForm(topLevelForm);
+      setToggleDisplay(topLevelForm, false);
+      composerToggleBtn.textContent = "Comment";
+    }
+  });
+
+  composerToggleBtn.addEventListener("click", () => {
+    const nextOpen = topLevelForm.style.display === "none";
+
+    setToggleDisplay(topLevelForm, nextOpen);
+    composerToggleBtn.textContent = nextOpen ? "Hide comment box" : "Comment";
+
+    if (nextOpen) {
+      commentUiState.openCommentForms.add(post.id);
+      focusCommentForm(topLevelForm);
+    } else {
+      commentUiState.openCommentForms.delete(post.id);
+      resetCommentForm(topLevelForm);
     }
   });
 
   header.append(heading, toggleBtn);
-  panel.append(form, commentsList);
+  panel.append(composerActions, topLevelForm, commentsList);
   section.append(header, panel);
+
   return section;
 }
 
-function createCommentThread({ postId, commentNode, currentUserId, onCommentChange, depth }) {
+function createCommentNode({ postId, node, currentUserId, onCommentChange, depth }) {
   const thread = createElement("div", { className: "comment-thread" });
   thread.style.setProperty("--comment-depth", String(depth));
 
-  const commentAuthor = findUserById(commentNode.userId);
-  const isOwner = commentNode.userId === currentUserId;
+  const author = findUserById(node.userId);
+  const isOwner = node.userId === currentUserId;
+  const replyFormIsOpen = commentUiState.openReplyForms.has(node.id);
+  const repliesListIsOpen = commentUiState.openReplyLists.has(node.id);
+  const editFormIsOpen = commentUiState.openEditForms.has(node.id);
 
-  const replyForm = createCommentForm({
-    inputId: `reply-input-${commentNode.id}`,
-    placeholder: `Reply to ${commentAuthor?.username || "this comment"}...`,
-    helperText: "Replies stay attached to this comment.",
-    submitText: "Reply",
-    successMessage: "Reply added.",
+  let replyForm;
+  replyForm = createCommentForm({
+    inputId: `reply-input-${node.id}`,
+    placeholder: `Reply to ${author?.username || "this comment"}...`,
+    helperText: "Your reply will be saved under this comment.",
+    submitText: "Post reply",
     compact: true,
-    onSubmitText: (content) =>
+    cancelText: "Cancel",
+    onCancel: () => {
+      commentUiState.openReplyForms.delete(node.id);
+      resetCommentForm(replyForm);
+      setToggleDisplay(replyForm, false);
+    },
+    onSubmit: (safeContent) =>
       addCommentToPost({
         postId,
         userId: currentUserId,
-        parentId: commentNode.id,
-        content,
+        parentId: node.id,
+        content: safeContent,
         voiceNote: null
       }),
     onSuccess: () => {
-      replyForm.hidden = true;
+      commentUiState.openReplyForms.delete(node.id);
+      commentUiState.openReplyLists.delete(node.id);
 
       if (typeof onCommentChange === "function") {
         onCommentChange();
       }
     }
   });
-
-  replyForm.hidden = true;
+  setToggleDisplay(replyForm, replyFormIsOpen);
 
   const editForm = createCommentForm({
-    inputId: `edit-comment-input-${commentNode.id}`,
+    inputId: `edit-comment-input-${node.id}`,
     placeholder: "Update your comment...",
     helperText: "Save when you are happy with your wording.",
     submitText: "Save",
-    successMessage: "Comment updated.",
     compact: true,
-    initialValue: commentNode.content,
+    initialValue: node.content,
     cancelText: "Cancel",
     onCancel: () => {
-      editForm.hidden = true;
+      commentUiState.openEditForms.delete(node.id);
+      setToggleDisplay(editForm, false);
     },
-    onSubmitText: (content) =>
+    onSubmit: (safeContent) =>
       updateCommentInPost({
         postId,
-        commentId: commentNode.id,
+        commentId: node.id,
         userId: currentUserId,
-        content
+        content: safeContent
       }),
     onSuccess: () => {
-      editForm.hidden = true;
+      commentUiState.openEditForms.delete(node.id);
+
+      if (typeof onCommentChange === "function") {
+        onCommentChange();
+      }
+    }
+  });
+  setToggleDisplay(editForm, editFormIsOpen);
+
+  const repliesList = createElement("div", { className: "comment-children" });
+  setToggleDisplay(repliesList, repliesListIsOpen);
+
+  if (node.children.length > 0) {
+    node.children.forEach((childNode) => {
+      repliesList.appendChild(
+        createCommentNode({
+          postId,
+          node: childNode,
+          currentUserId,
+          onCommentChange,
+          depth: depth + 1
+        })
+      );
+    });
+  }
+
+  const reactionBar = createReactionBar({
+    reactions: node.reactions,
+    activeReaction: getCommentUserReaction(node, currentUserId),
+    compact: true,
+    onReact: (reactionType) => {
+      setCommentReaction({
+        postId,
+        commentId: node.id,
+        userId: currentUserId,
+        reactionType
+      });
 
       if (typeof onCommentChange === "function") {
         onCommentChange();
@@ -314,38 +417,63 @@ function createCommentThread({ postId, commentNode, currentUserId, onCommentChan
     }
   });
 
-  editForm.hidden = true;
-
-  const commentCard = createCommentCard(commentNode, commentAuthor, {
+  const commentCard = createCommentCard(node, author, {
     isReply: depth > 0,
-    replyCount: commentNode.children.length,
-    onReplyClick: () => {
-      editForm.hidden = true;
-      replyForm.hidden = !replyForm.hidden;
+    repliesCount: node.children.length,
+    repliesExpanded: repliesListIsOpen,
+    reactionBar,
+    onReply: () => {
+      commentUiState.openEditForms.delete(node.id);
+      setToggleDisplay(editForm, false);
 
-      if (!replyForm.hidden) {
-        replyForm.querySelector("textarea")?.focus();
+      const nextOpen = replyForm.style.display === "none";
+      setToggleDisplay(replyForm, nextOpen);
+
+      if (nextOpen) {
+        commentUiState.openReplyForms.add(node.id);
+        focusCommentForm(replyForm);
+      } else {
+        commentUiState.openReplyForms.delete(node.id);
+        resetCommentForm(replyForm);
       }
     },
-    onEditClick: isOwner
-      ? () => {
-          replyForm.hidden = true;
-          editForm.hidden = !editForm.hidden;
+    onToggleReplies:
+      node.children.length > 0
+        ? () => {
+            const nextOpen = repliesList.style.display === "none";
+            setToggleDisplay(repliesList, nextOpen);
 
-          if (!editForm.hidden) {
-            editForm.querySelector("textarea")?.focus();
+            if (nextOpen) {
+              commentUiState.openReplyLists.add(node.id);
+            } else {
+              commentUiState.openReplyLists.delete(node.id);
+            }
+          }
+        : null,
+    onEdit: isOwner
+      ? () => {
+          commentUiState.openReplyForms.delete(node.id);
+          setToggleDisplay(replyForm, false);
+
+          const nextOpen = editForm.style.display === "none";
+          setToggleDisplay(editForm, nextOpen);
+
+          if (nextOpen) {
+            commentUiState.openEditForms.add(node.id);
+          } else {
+            commentUiState.openEditForms.delete(node.id);
           }
         }
       : null,
-    onDeleteClick: isOwner
+    onDelete: isOwner
       ? () => {
-          const replyCount = countDescendants(commentNode);
+          const descendantCount = countDescendants(node);
 
           showConfirmDialog({
             title: "Delete comment?",
             message:
-              replyCount > 0
-                ? "This comment and its replies will be permanently removed."
+              descendantCount > 0
+                ? "This comment and all nested replies will be permanently removed."
                 : "This comment will be permanently removed.",
             confirmText: "Delete",
             cancelText: "Cancel",
@@ -354,17 +482,16 @@ function createCommentThread({ postId, commentNode, currentUserId, onCommentChan
               try {
                 deleteCommentFromPost({
                   postId,
-                  commentId: commentNode.id,
+                  commentId: node.id,
                   userId: currentUserId
                 });
-
-                showToast("Comment deleted.", "success");
+                clearCommentUiState(node);
 
                 if (typeof onCommentChange === "function") {
                   onCommentChange();
                 }
               } catch (error) {
-                showToast(error.message || "Failed to delete comment.", "error");
+                console.error(error);
               }
             }
           });
@@ -374,22 +501,8 @@ function createCommentThread({ postId, commentNode, currentUserId, onCommentChan
 
   thread.append(commentCard, editForm, replyForm);
 
-  if (commentNode.children.length > 0) {
-    const replies = createElement("div", { className: "comment-children" });
-
-    commentNode.children.forEach((replyNode) => {
-      replies.appendChild(
-        createCommentThread({
-          postId,
-          commentNode: replyNode,
-          currentUserId,
-          onCommentChange,
-          depth: depth + 1
-        })
-      );
-    });
-
-    thread.appendChild(replies);
+  if (node.children.length > 0) {
+    thread.appendChild(repliesList);
   }
 
   return thread;
@@ -400,8 +513,7 @@ function createCommentForm({
   placeholder,
   helperText,
   submitText,
-  successMessage,
-  onSubmitText,
+  onSubmit,
   onSuccess,
   compact = false,
   initialValue = "",
@@ -414,11 +526,10 @@ function createCommentForm({
 
   const inputWrapper = createElement("div", { className: "field-group" });
   const textarea = document.createElement("textarea");
-
   textarea.className = `form-input comment-textarea${compact ? " comment-textarea-reply" : ""}`;
   textarea.placeholder = placeholder;
   textarea.required = true;
-  textarea.maxLength = 500;
+  textarea.maxLength = 1000;
   textarea.id = inputId;
   textarea.value = initialValue;
 
@@ -446,8 +557,8 @@ function createCommentForm({
     type: "submit",
     text: submitText
   });
-
   actions.appendChild(submitBtn);
+
   inputWrapper.append(textarea, helper, error);
   form.append(inputWrapper, actions);
 
@@ -456,31 +567,108 @@ function createCommentForm({
     clearFormErrors(form);
 
     try {
-      if (typeof onSubmitText !== "function") {
+      if (typeof onSubmit !== "function") {
         throw new Error("Comment form submit handler is missing.");
       }
 
       const safeContent = validatePostContent(textarea.value);
-      onSubmitText(safeContent);
-      textarea.value = "";
-      showToast(successMessage, "success");
+      onSubmit(safeContent);
 
       if (typeof onSuccess === "function") {
         onSuccess();
       }
-    } catch (errorObj) {
-      setFieldError(inputId, errorObj.message || `Failed to add ${submitText.toLowerCase()}.`);
+    } catch (error) {
+      setFieldError(inputId, error.message || "Failed to save comment.");
     }
   });
 
   return form;
 }
 
-function countDescendants(commentNode) {
-  return commentNode.children.reduce(
-    (total, childNode) => total + 1 + countDescendants(childNode),
-    0
-  );
+function clearCommentUiState(node) {
+  commentUiState.openReplyForms.delete(node.id);
+  commentUiState.openReplyLists.delete(node.id);
+  commentUiState.openEditForms.delete(node.id);
+
+  node.children.forEach((childNode) => {
+    clearCommentUiState(childNode);
+  });
+}
+
+function setToggleDisplay(element, isVisible) {
+  element.style.display = isVisible ? "" : "none";
+}
+
+function resetCommentForm(form, initialValue = "") {
+  const textarea = form?.querySelector("textarea");
+
+  if (textarea) {
+    textarea.value = initialValue;
+  }
+
+  if (form) {
+    clearFormErrors(form);
+  }
+}
+
+function focusCommentForm(form) {
+  form?.querySelector("textarea")?.focus();
+}
+
+function createPostContent(post) {
+  const wrapper = createElement("div", { className: "post-content-block" });
+  const content = createElement("p", { className: "post-content" });
+  const fullText = post.content || "";
+  const isLongPost = fullText.length > POST_PREVIEW_LENGTH;
+  let expanded = false;
+
+  const renderContent = () => {
+    if (!isLongPost || expanded) {
+      content.textContent = fullText;
+      return;
+    }
+
+    content.textContent = `${fullText.slice(0, POST_PREVIEW_LENGTH).trimEnd()}...`;
+  };
+
+  renderContent();
+  wrapper.appendChild(content);
+
+  if (!isLongPost) {
+    return wrapper;
+  }
+
+  const toggleBtn = createElement("button", {
+    className: "link-btn post-content-toggle-btn",
+    type: "button",
+    text: "Read more"
+  });
+
+  toggleBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    renderContent();
+    toggleBtn.textContent = expanded ? "Show less" : "Read more";
+  });
+
+  wrapper.appendChild(toggleBtn);
+  return wrapper;
+}
+
+function getCommentsToggleLabel(isOpen, count) {
+  return isOpen
+    ? `\u{1F4AC} Hide comments (${count})`
+    : `\u{1F4AC} Comments (${count})`;
+}
+
+function countDescendants(node) {
+  return node.children.reduce((total, childNode) => {
+    return total + 1 + countDescendants(childNode);
+  }, 0);
+}
+
+function formatPostMeta(post) {
+  const baseMeta = `${post.location.township} ${post.location.extension} | ${formatTimestamp(post.createdAt)}`;
+  return post.updatedAt ? `${baseMeta} | Edited` : baseMeta;
 }
 
 function formatTimestamp(isoDate) {

@@ -392,6 +392,16 @@ body {
   line-height: 1.5;
 }
 
+.post-content-block {
+  display: grid;
+  gap: 8px;
+}
+
+.post-content-toggle-btn {
+  width: fit-content;
+  font-size: 13px;
+}
+
 .post-image-wrapper {
   width: 100%;
   overflow: hidden;
@@ -423,6 +433,9 @@ body {
 }
 
 .reaction-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   border-radius: 999px;
   padding: 10px 14px;
@@ -442,6 +455,15 @@ body {
 .reaction-btn-active {
   background: #111827;
   color: #ffffff;
+}
+
+.reaction-bar-compact {
+  gap: 8px;
+}
+
+.reaction-bar-compact .reaction-btn {
+  padding: 7px 10px;
+  font-size: 12px;
 }
 
 .field-helper {
@@ -655,7 +677,38 @@ body {
   gap: 14px;
   margin-left: 16px;
   padding-left: 16px;
+  padding-right: 10px;
   border-left: 3px solid #dbeafe;
+  max-height: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #93c5fd #eff6ff;
+}
+
+.comments-panel::-webkit-scrollbar {
+  width: 10px;
+}
+
+.comments-panel::-webkit-scrollbar-track {
+  background: #eff6ff;
+  border-radius: 999px;
+}
+
+.comments-panel::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #93c5fd, #60a5fa);
+  border-radius: 999px;
+  border: 2px solid #eff6ff;
+}
+
+.comments-panel::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #60a5fa, #3b82f6);
+}
+
+.comments-composer-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .comment-form {
@@ -665,7 +718,8 @@ body {
 
 .comment-textarea {
   min-height: 90px;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
 }
 
 .comment-form-actions {
@@ -736,26 +790,20 @@ body {
   flex-wrap: wrap;
 }
 
-.comment-reply-count {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: #dbeafe;
-  color: #1e3a8a;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .comment-action-btn {
   border: none;
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   padding: 0;
   font-size: 13px;
   font-weight: 700;
   color: #1d4ed8;
   cursor: pointer;
+}
+
+.comment-replies-toggle-btn {
+  color: #0f766e;
 }
 
 .comment-action-danger {

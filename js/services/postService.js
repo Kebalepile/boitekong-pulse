@@ -244,11 +244,7 @@ export function setPostReaction({ postId, userId, reactionType }) {
   }
 
   const post = posts[postIndex];
-  const reactions = {
-    like: Array.isArray(post.reactions?.like) ? [...post.reactions.like] : [],
-    meh: Array.isArray(post.reactions?.meh) ? [...post.reactions.meh] : [],
-    dislike: Array.isArray(post.reactions?.dislike) ? [...post.reactions.dislike] : []
-  };
+  const reactions = createReactionRecord(post.reactions);
 
   const alreadyActive = reactions[reactionType].includes(userId);
 
@@ -269,16 +265,58 @@ export function setPostReaction({ postId, userId, reactionType }) {
   return posts[postIndex];
 }
 
-export function getUserReaction(post, userId) {
-  if (!post?.reactions || !userId) {
-    return null;
+export function setCommentReaction({ postId, commentId, userId, reactionType }) {
+  if (!ALLOWED_REACTIONS.includes(reactionType)) {
+    throw makeError("REACTION_INVALID", null, "Invalid reaction type.");
   }
 
-  if (post.reactions.like?.includes(userId)) return "like";
-  if (post.reactions.meh?.includes(userId)) return "meh";
-  if (post.reactions.dislike?.includes(userId)) return "dislike";
+  const posts = storage.get(STORAGE_KEYS.POSTS, []);
+  const postIndex = posts.findIndex((post) => post.id === postId);
 
-  return null;
+  if (postIndex === -1) {
+    throw makeError("POST_NOT_FOUND", null, "Post not found.");
+  }
+
+  const post = posts[postIndex];
+  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
+  const commentIndex = comments.findIndex((comment) => comment.id === commentId);
+
+  if (commentIndex === -1) {
+    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
+  }
+
+  const comment = comments[commentIndex];
+  const reactions = createReactionRecord(comment.reactions);
+  const alreadyActive = reactions[reactionType].includes(userId);
+
+  ALLOWED_REACTIONS.forEach((type) => {
+    reactions[type] = reactions[type].filter((id) => id !== userId);
+  });
+
+  if (!alreadyActive) {
+    reactions[reactionType].push(userId);
+  }
+
+  comments[commentIndex] = {
+    ...comment,
+    reactions
+  };
+
+  posts[postIndex] = {
+    ...post,
+    comments
+  };
+
+  savePosts(posts);
+  return comments[commentIndex];
+}
+
+export function getUserReaction(post, userId) {
+  return getActiveReaction(post, userId);
+}
+
+export function getCommentUserReaction(comment, userId) {
+  return getActiveReaction(comment, userId);
 }
 
 function collectCommentBranchIds(comments, rootCommentId) {
@@ -297,4 +335,24 @@ function collectCommentBranchIds(comments, rootCommentId) {
   }
 
   return ids;
+}
+
+function createReactionRecord(reactions = {}) {
+  return {
+    like: Array.isArray(reactions.like) ? [...reactions.like] : [],
+    meh: Array.isArray(reactions.meh) ? [...reactions.meh] : [],
+    dislike: Array.isArray(reactions.dislike) ? [...reactions.dislike] : []
+  };
+}
+
+function getActiveReaction(entity, userId) {
+  if (!entity?.reactions || !userId) {
+    return null;
+  }
+
+  if (entity.reactions.like?.includes(userId)) return "like";
+  if (entity.reactions.meh?.includes(userId)) return "meh";
+  if (entity.reactions.dislike?.includes(userId)) return "dislike";
+
+  return null;
 }

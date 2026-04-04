@@ -25,6 +25,11 @@ export function createComment({
     userId,
     parentId,
     content: validatePostContent(content),
+    reactions: {
+      like: [],
+      meh: [],
+      dislike: []
+    },
     voiceNote,
     createdAt: new Date().toISOString(),
     updatedAt: null
