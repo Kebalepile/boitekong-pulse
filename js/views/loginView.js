@@ -8,21 +8,41 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { showToast } from "../components/toast.js";
+import { createBrandMark } from "../components/brandMark.js";
 
 export function renderLogin(app) {
   clearElement(app);
 
   const shell = createElement("section", { className: "auth-shell" });
   const card = createElement("div", { className: "auth-card" });
+  const intro = createElement("div", { className: "auth-intro" });
+  const introEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Rustenburg, connected"
+  });
 
   const title = createElement("h1", {
     className: "auth-title",
-    text: "Boitekong Plus"
+    text: "Welcome back"
   });
 
   const subtitle = createElement("p", {
     className: "auth-subtitle",
-    text: "Log in to your local community feed"
+    text: "Open Boitekong Now and catch up on the latest local posts, replies, and voice notes."
+  });
+  const featureList = createElement("div", { className: "auth-feature-list" });
+
+  [
+    "Hyper-local township feed",
+    "Layered comment threads",
+    "Voice-note conversations"
+  ].forEach((itemText) => {
+    featureList.appendChild(
+      createElement("span", {
+        className: "auth-feature-chip",
+        text: itemText
+      })
+    );
   });
 
   const form = createElement("form", {
@@ -49,7 +69,7 @@ export function renderLogin(app) {
   });
 
   const submitBtn = createElement("button", {
-    className: "primary-btn",
+    className: "primary-btn auth-submit-btn",
     text: "Log In",
     type: "submit"
   });
@@ -58,7 +78,7 @@ export function renderLogin(app) {
 
   const footer = createElement("div", { className: "auth-footer" });
   const footerText = createElement("span", {
-    text: "Don’t have an account?"
+    text: "Don't have an account?"
   });
 
   const registerBtn = createElement("button", {
@@ -69,7 +89,8 @@ export function renderLogin(app) {
   });
 
   footer.append(footerText, registerBtn);
-  card.append(title, subtitle, form, footer);
+  intro.append(createBrandMark(), introEyebrow, title, subtitle, featureList);
+  card.append(intro, form, footer);
   shell.appendChild(card);
   app.appendChild(shell);
 

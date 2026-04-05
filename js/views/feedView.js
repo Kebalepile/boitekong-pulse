@@ -9,15 +9,36 @@ export function renderFeed(app, currentUser) {
   clearElement(app);
 
   const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser);
+  const navbar = createNavbar(currentUser, "feed");
 
   const feedMain = createElement("main", { className: "feed-main" });
-  const feedHeader = createElement("section", { className: "feed-header-card" });
-
-  const feedTitle = createElement("h2", { text: "Community Feed" });
-  const feedText = createElement("p", {
-    text: "See what people in your area are posting."
+  const feedHeader = createElement("section", {
+    className: "feed-header-card feed-hero-card"
   });
+  const posts = getPosts();
+
+  const eyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Township pulse"
+  });
+  const feedTitle = createElement("h2", {
+    className: "section-title",
+    text: "Community feed"
+  });
+  const feedText = createElement("p", {
+    className: "section-copy",
+    text: "See what people in your area are saying right now, then jump into the thread with comments, replies, and voice notes."
+  });
+  const statScroller = createElement("div", { className: "feed-stat-scroller" });
+  const statRow = createElement("div", { className: "feed-stat-row" });
+  const uniqueAuthors = new Set(posts.map((post) => post.userId)).size;
+
+  statRow.append(
+    createStatPill("Posts", String(posts.length)),
+    createStatPill("Neighbors", String(uniqueAuthors)),
+    createStatPill("Your B-Point", `${currentUser.location.township} ${currentUser.location.extension}`)
+  );
+  statScroller.appendChild(statRow);
 
   const filters = createElement("div", { className: "filter-row" });
 
@@ -43,16 +64,8 @@ export function renderFeed(app, currentUser) {
     type: "button"
   });
 
-  const createPostBtn = createElement("button", {
-    className: "primary-btn",
-    text: "Create Post",
-    type: "button"
-  });
-
-  createPostBtn.addEventListener("click", () => navigate("create-post"));
-
-  filters.append(townshipInput, extensionInput, clearBtn, createPostBtn);
-  feedHeader.append(feedTitle, feedText, filters);
+  filters.append(townshipInput, extensionInput, clearBtn);
+  feedHeader.append(eyebrow, feedTitle, feedText, statScroller, filters);
 
   const feedList = createElement("section", { className: "feed-list" });
 
@@ -122,4 +135,21 @@ export function renderFeed(app, currentUser) {
   });
 
   renderPosts();
+}
+
+function createStatPill(label, value) {
+  const pill = createElement("div", {
+    className: `feed-stat-pill${label === "Your B-Point" ? " feed-stat-pill-wide" : ""}`
+  });
+  const pillLabel = createElement("span", {
+    className: "feed-stat-label",
+    text: label
+  });
+  const pillValue = createElement("strong", {
+    className: "feed-stat-value",
+    text: value
+  });
+
+  pill.append(pillLabel, pillValue);
+  return pill;
 }

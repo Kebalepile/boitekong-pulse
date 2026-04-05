@@ -14,8 +14,29 @@ function makeError(code, field, message) {
   return error;
 }
 
+function normalizeUserRecord(user = {}) {
+  return {
+    ...user,
+    avatarDataUrl: typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : "",
+    followingUserIds: Array.isArray(user.followingUserIds)
+      ? Array.from(
+          new Set(
+            user.followingUserIds.filter(
+              (followedUserId) => typeof followedUserId === "string" && followedUserId.trim()
+            )
+          )
+        )
+      : [],
+    createdAt:
+      typeof user.createdAt === "string" && user.createdAt
+        ? user.createdAt
+        : new Date().toISOString()
+  };
+}
+
 export function getUsers() {
-  return storage.get(STORAGE_KEYS.USERS, []);
+  const users = storage.get(STORAGE_KEYS.USERS, []);
+  return Array.isArray(users) ? users.map(normalizeUserRecord) : [];
 }
 
 export function saveUsers(users) {
@@ -54,7 +75,8 @@ export function updateUserProfile({
   username,
   township,
   extension,
-  passwordHash
+  passwordHash,
+  avatarDataUrl
 }) {
   const users = getUsers();
   const userIndex = users.findIndex((user) => user.id === userId);
@@ -83,7 +105,11 @@ export function updateUserProfile({
     location: {
       township: safeTownship,
       extension: safeExtension
-    }
+    },
+    avatarDataUrl:
+      typeof avatarDataUrl === "string"
+        ? avatarDataUrl
+        : currentRecord.avatarDataUrl || ""
   };
 
   if (passwordHash) {
@@ -98,13 +124,111 @@ export function updateUserProfile({
 }
 
 export function setCurrentUser(user) {
-  storage.set(STORAGE_KEYS.CURRENT_USER, user);
+  storage.set(STORAGE_KEYS.CURRENT_USER, user ? normalizeUserRecord(user) : null);
 }
 
 export function getCurrentUser() {
-  return storage.get(STORAGE_KEYS.CURRENT_USER, null);
+  const currentUser = storage.get(STORAGE_KEYS.CURRENT_USER, null);
+  return currentUser ? normalizeUserRecord(currentUser) : null;
 }
 
 export function clearCurrentUser() {
   storage.remove(STORAGE_KEYS.CURRENT_USER);
+}
+
+export function getFollowerCount(userId) {
+  return getUsers().filter((user) => user.followingUserIds.includes(userId)).length;
+}
+
+export function getFollowingUsers(userId, { limit = Infinity } = {}) {
+  const users = getUsers();
+  const user = users.find((entry) => entry.id === userId);
+
+  if (!user) {
+    return [];
+  }
+
+  const usersById = new Map(users.map((entry) => [entry.id, entry]));
+
+  return user.followingUserIds
+    .map((followedUserId) => usersById.get(followedUserId) || null)
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+export function isFollowingUser({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) {
+    return false;
+  }
+
+  const currentUser = findUserById(currentUserId);
+  return Boolean(currentUser?.followingUserIds.includes(targetUserId));
+}
+
+export function followUser({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId) {
+    throw makeError("FOLLOW_INVALID", null, "Could not follow that user.");
+  }
+
+  if (currentUserId === targetUserId) {
+    throw makeError("FOLLOW_SELF", null, "You cannot follow yourself.");
+  }
+
+  const users = getUsers();
+  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
+  const targetUser = users.find((user) => user.id === targetUserId);
+
+  if (currentUserIndex === -1 || !targetUser) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const currentUser = users[currentUserIndex];
+
+  if (currentUser.followingUserIds.includes(targetUserId)) {
+    return currentUser;
+  }
+
+  const updatedUser = {
+    ...currentUser,
+    followingUserIds: [...currentUser.followingUserIds, targetUserId]
+  };
+
+  users[currentUserIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === currentUserId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
+}
+
+export function unfollowUser({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId) {
+    throw makeError("FOLLOW_INVALID", null, "Could not update follow state.");
+  }
+
+  const users = getUsers();
+  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
+
+  if (currentUserIndex === -1) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const currentUser = users[currentUserIndex];
+  const updatedUser = {
+    ...currentUser,
+    followingUserIds: currentUser.followingUserIds.filter(
+      (followedUserId) => followedUserId !== targetUserId
+    )
+  };
+
+  users[currentUserIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === currentUserId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
 }

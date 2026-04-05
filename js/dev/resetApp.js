@@ -3,4 +3,5 @@ export function resetAppData() {
   window.location.reload();
 }
 
+window.resetBTownPulseApp = resetAppData;
 window.resetBoitekongPlusApp = resetAppData;

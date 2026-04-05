@@ -21,7 +21,6 @@ export function createPost({ userId, content, image = "", location }) {
     },
     reactions: {
       like: [],
-      meh: [],
       dislike: []
     },
     comments: [],

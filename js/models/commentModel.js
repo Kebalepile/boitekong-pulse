@@ -33,7 +33,6 @@ export function createComment({
     content: validatedComment.content,
     reactions: {
       like: [],
-      meh: [],
       dislike: []
     },
     voiceNote: normalizeVoiceNote(validatedComment.voiceNote),

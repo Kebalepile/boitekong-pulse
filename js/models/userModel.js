@@ -16,6 +16,8 @@ export function createUser({ username, location, passwordHash }) {
       township: validateTownship(location.township),
       extension: validateExtension(location.extension)
     },
+    avatarDataUrl: "",
+    followingUserIds: [],
     passwordHash,
     createdAt: new Date().toISOString()
   };

@@ -6,6 +6,7 @@ import {
   getCommentUserReaction,
   deletePost,
   addCommentToPost,
+  getPostById,
   getCommentsForPost,
   updateCommentInPost,
   deleteCommentFromPost
@@ -13,6 +14,8 @@ import {
 import { navigate } from "../router.js";
 import { showToast } from "./toast.js";
 import { showConfirmDialog } from "./confirmDialog.js";
+import { showActionSheet } from "./actionSheet.js";
+import { showUserPreviewSheet } from "./userPreviewSheet.js";
 import { createCommentCard } from "./commentCard.js";
 import { findUserById } from "../services/userService.js";
 import { buildCommentTree } from "../utils/commentTree.js";
@@ -22,15 +25,20 @@ import {
   startVoiceNoteRecording,
   formatVoiceNoteDuration,
   MAX_VOICE_NOTE_DURATION_MS,
-  configureVoiceNoteAudio
+  configureVoiceNoteAudio,
+  getNextVoiceNotePlaybackRate,
+  formatVoiceNotePlaybackRate
 } from "../utils/voiceNotes.js";
-import { createVoiceNoteVisualizer } from "../utils/voiceNoteVisualizer.js";
+import {
+  createVoiceNoteVisualizer,
+  attachVoiceNoteScrubber
+} from "../utils/voiceNoteVisualizer.js";
+import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
+import { createAvatarElement } from "../utils/avatar.js";
 
 const POST_PREVIEW_LENGTH = 300;
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
-const voiceNoteChoiceText = voiceNoteFeatureStatus.supported
-  ? "Choose text or voice note."
-  : voiceNoteFeatureStatus.message;
+const voiceNoteChoiceText = voiceNoteFeatureStatus.supported ? "" : voiceNoteFeatureStatus.message;
 
 const commentUiState = {
   openPanels: new Set(),
@@ -38,16 +46,46 @@ const commentUiState = {
   openReplyForms: new Set(),
   openReplyLists: new Set(),
   openEditForms: new Set(),
-  sortOrders: new Map()
+  sortOrders: new Map(),
+  panelEntries: new Map()
 };
 
 export function createPostCard(post, author, currentUserId, onReactionChange) {
-  const card = createElement("article", { className: "post-card" });
+  let card = createElement("article", { className: "post-card" });
+  card.dataset.postId = post.id;
+
+  const refreshCurrentPostCard = ({ focusCommentId = null } = {}) => {
+    const latestPost = getPostById(post.id);
+
+    if (!latestPost) {
+      if (typeof onReactionChange === "function") {
+        onReactionChange();
+      }
+      return;
+    }
+
+    const latestAuthor = findUserById(latestPost.userId) || author;
+    const nextCard = createPostCard(latestPost, latestAuthor, currentUserId, onReactionChange);
+
+    card.replaceWith(nextCard);
+    card = nextCard;
+
+    if (focusCommentId) {
+      window.requestAnimationFrame(() => {
+        focusCommentById(latestPost.id, focusCommentId);
+      });
+    }
+  };
 
   const header = createElement("div", { className: "post-card-header" });
+  const authorInfo = createElement("div", { className: "post-author-row" });
+  const authorAvatarElement = createAvatarElement(author, {
+    size: "md",
+    className: "post-author-avatar",
+    decorative: true
+  });
   const authorBlock = createElement("div", { className: "post-author-block" });
-
-  const authorName = createElement("h3", {
+  const authorNameElement = createElement("span", {
     className: "post-author",
     text: author?.username || "Unknown User"
   });
@@ -56,17 +94,71 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
     className: "post-meta",
     text: formatPostMeta(post)
   });
+  const contextRow = createElement("div", { className: "post-context-row" });
+  const storedComments = Array.isArray(post.comments) ? post.comments : [];
+  const voiceNoteCount = storedComments.filter((comment) => comment.voiceNote?.dataUrl).length;
+
+  const openAuthorProfile =
+    author?.id
+      ? () => {
+          showUserPreviewSheet({
+            userId: author.id,
+            currentUserId
+          });
+        }
+      : null;
+  const authorAvatar =
+    typeof openAuthorProfile === "function"
+      ? createProfileTriggerButton({
+          className: "user-preview-trigger user-preview-trigger-avatar",
+          label: `Open ${author?.username || "user"} profile`,
+          onClick: openAuthorProfile,
+          child: authorAvatarElement
+        })
+      : authorAvatarElement;
+  const authorName =
+    typeof openAuthorProfile === "function"
+      ? createProfileTriggerButton({
+          className: "user-preview-trigger user-preview-trigger-text post-author-btn",
+          label: `Open ${author?.username || "user"} profile`,
+          onClick: openAuthorProfile,
+          child: authorNameElement
+        })
+      : authorNameElement;
 
   authorBlock.append(authorName, meta);
-  header.appendChild(authorBlock);
+  authorInfo.append(authorAvatar, authorBlock);
+  header.appendChild(authorInfo);
 
-  if (post.userId === currentUserId) {
-    header.appendChild(createPostOwnerActions(post, currentUserId, onReactionChange));
+  header.appendChild(createPostMenuButton(post, author, currentUserId, onReactionChange));
+
+  if (storedComments.length > 0) {
+    contextRow.appendChild(
+      createPostContextPill(
+        "post-context-pill-activity",
+        `${storedComments.length} ${storedComments.length === 1 ? "comment" : "comments"}`
+      )
+    );
+  }
+
+  if (voiceNoteCount > 0) {
+    contextRow.appendChild(
+      createPostContextPill(
+        "post-context-pill-voice",
+        `${voiceNoteCount} voice ${voiceNoteCount === 1 ? "note" : "notes"}`
+      )
+    );
   }
 
   const content = createPostContent(post);
 
-  card.append(header, content);
+  card.append(header);
+
+  if (contextRow.childElementCount > 0) {
+    card.appendChild(contextRow);
+  }
+
+  card.appendChild(content);
 
   if (post.image) {
     card.appendChild(createPostImage(post.image));
@@ -80,76 +172,158 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
 
   footer.appendChild(footerText);
 
-  card.append(
-    footer,
-    createReactionBar({
+  let postReactionBar = null;
+
+  const handlePostReaction = (reactionType) => {
+    const updatedPost = setPostReaction({
+      postId: post.id,
+      userId: currentUserId,
+      reactionType
+    });
+
+    post.reactions = updatedPost.reactions;
+
+    const nextReactionBar = buildPostReactionBar();
+    postReactionBar.replaceWith(nextReactionBar);
+    postReactionBar = nextReactionBar;
+  };
+
+  function buildPostReactionBar() {
+    return createReactionBar({
       reactions: post.reactions,
       activeReaction: getUserReaction(post, currentUserId),
-      onReact: (reactionType) => {
-        setPostReaction({
-          postId: post.id,
-          userId: currentUserId,
-          reactionType
-        });
+      iconOnlyReactions: ["like", "dislike"],
+      onReact: handlePostReaction
+    });
+  }
 
-        if (typeof onReactionChange === "function") {
-          onReactionChange();
-        }
-      }
-    }),
-    createCommentsSection(post, currentUserId, onReactionChange)
+  postReactionBar = buildPostReactionBar();
+
+  card.append(
+    footer,
+    postReactionBar,
+    createCommentsSection(post, currentUserId, refreshCurrentPostCard)
   );
 
   return card;
 }
 
-function createPostOwnerActions(post, currentUserId, onReactionChange) {
-  const ownerActions = createElement("div", { className: "owner-actions" });
-
-  const editBtn = createElement("button", {
-    className: "owner-action-btn",
+function createPostMenuButton(post, author, currentUserId, onReactionChange) {
+  const isOwner = post.userId === currentUserId;
+  const menuBtn = createElement("button", {
+    className: "post-menu-btn",
     type: "button",
-    text: "\u270E Edit"
+    attributes: {
+      "aria-label": "Post options",
+      title: "Post options"
+    }
   });
 
-  const deleteBtn = createElement("button", {
-    className: "owner-action-btn owner-action-danger",
-    type: "button",
-    text: "\u{1F5D1} Delete"
-  });
-
-  editBtn.addEventListener("click", () => {
-    navigate("edit-post", { postId: post.id });
-  });
-
-  deleteBtn.addEventListener("click", () => {
-    showConfirmDialog({
-      title: "Delete post?",
-      message: "This post will be permanently removed.",
-      confirmText: "Delete",
-      cancelText: "Cancel",
-      danger: true,
-      onConfirm: () => {
-        try {
-          deletePost({
-            postId: post.id,
-            userId: currentUserId
-          });
-
-          showToast("Post deleted.", "success");
-
-          if (typeof onReactionChange === "function") {
-            onReactionChange();
+  menuBtn.appendChild(createMoreIcon());
+  menuBtn.addEventListener("click", () => {
+    showActionSheet({
+      title: "Post",
+      actions: [
+        {
+          label: "Share",
+          onSelect: () => sharePostEntry(post, author)
+        },
+        {
+          label: "Report",
+          onSelect: () => {
+            showToast("Report flow coming soon.", "success");
           }
-        } catch (error) {
-          showToast(error.message || "Failed to delete post.", "error");
-        }
-      }
+        },
+        ...(isOwner
+          ? [
+              {
+                label: "Edit",
+                onSelect: () => {
+                  navigate("edit-post", { postId: post.id });
+                }
+              },
+              {
+                label: "Delete",
+                danger: true,
+                onSelect: () => {
+                  showConfirmDialog({
+                    title: "Delete post?",
+                    message: "This post will be permanently removed.",
+                    confirmText: "Delete",
+                    cancelText: "Cancel",
+                    danger: true,
+                    onConfirm: () => {
+                      try {
+                        deletePost({
+                          postId: post.id,
+                          userId: currentUserId
+                        });
+
+                        showToast("Post deleted.", "success");
+
+                        if (typeof onReactionChange === "function") {
+                          onReactionChange();
+                        }
+                      } catch (error) {
+                        showToast(error.message || "Failed to delete post.", "error");
+                      }
+                    }
+                  });
+                }
+              }
+            ]
+          : [])
+      ]
     });
   });
 
-  ownerActions.append(editBtn, deleteBtn);
-  return ownerActions;
+  return menuBtn;
+}
+
+function createMoreIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("post-menu-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute(
+    "d",
+    "M12 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 7Zm0 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 14Zm0 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 21Z"
+  );
+  svg.appendChild(path);
+
+  return svg;
+}
+
+async function sharePostEntry(post, author) {
+  const authorName = author?.username || "Unknown User";
+  const shareText = `${authorName}: ${post.content}`;
+
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      await navigator.share({
+        title: "Post",
+        text: shareText
+      });
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareText);
+      showToast("Post copied to clipboard.", "success");
+      return;
+    }
+
+    throw new Error("Sharing is not available on this device.");
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return;
+    }
+
+    showToast(error.message || "Could not share post.", "error");
+  }
 }
 
 function createPostImage(imageUrl) {
@@ -170,22 +344,55 @@ function createPostImage(imageUrl) {
   return imageWrapper;
 }
 
-function createReactionBar({ reactions, activeReaction, onReact, compact = false }) {
+function createPostContextPill(className, text) {
+  return createElement("span", {
+    className: `post-context-pill ${className}`,
+    text
+  });
+}
+
+function createReactionBar({
+  reactions,
+  activeReaction,
+  onReact,
+  compact = false,
+  iconOnly = false,
+  iconOnlyReactions = [],
+  allowedReactions = ["like", "dislike"]
+}) {
   const wrapper = createElement("div", {
     className: `reaction-bar${compact ? " reaction-bar-compact" : ""}`
   });
   const buttons = [
     { type: "like", emoji: "\u{1F44D}", label: "Like", count: reactions?.like?.length || 0 },
-    { type: "meh", emoji: "\u{1F610}", label: "Meh", count: reactions?.meh?.length || 0 },
     { type: "dislike", emoji: "\u{1F44E}", label: "Dislike", count: reactions?.dislike?.length || 0 }
-  ];
+  ].filter(({ type }) => allowedReactions.includes(type));
 
   buttons.forEach(({ type, emoji, label, count }) => {
+    const useIconOnly = iconOnly || iconOnlyReactions.includes(type);
     const button = createElement("button", {
-      className: `reaction-btn${activeReaction === type ? " reaction-btn-active" : ""}`,
+      className: `reaction-btn reaction-btn-${type}${activeReaction === type ? " reaction-btn-active" : ""}${useIconOnly ? " reaction-btn-icon-only" : ""}`,
       type: "button",
-      text: `${emoji} ${label} (${count})`
+      attributes: {
+        "aria-label": label,
+        title: label
+      }
     });
+
+    if (useIconOnly) {
+      button.appendChild(createReactionIcon(type));
+
+      if (count > 0) {
+        button.appendChild(
+          createElement("span", {
+            className: "reaction-btn-count",
+            text: String(count)
+          })
+        );
+      }
+    } else {
+      button.textContent = `${emoji} ${label} (${count})`;
+    }
 
     button.addEventListener("click", () => {
       if (typeof onReact === "function") {
@@ -199,19 +406,55 @@ function createReactionBar({ reactions, activeReaction, onReact, compact = false
   return wrapper;
 }
 
-function createCommentsSection(post, currentUserId, onReactionChange) {
+function createReactionIcon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("reaction-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "currentColor");
+  path.setAttribute("d", getReactionIconPath(name));
+  svg.appendChild(path);
+
+  return svg;
+}
+
+function createProfileTriggerButton({ className, label, onClick, child }) {
+  const button = createElement("button", {
+    className,
+    type: "button",
+    attributes: {
+      "aria-label": label,
+      title: label
+    }
+  });
+
+  button.appendChild(child);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function getReactionIconPath(name) {
+  const iconPaths = {
+    like:
+      "M2 21h4V9H2v12Zm20-11.9c0-1.16-.95-2.1-2.12-2.1h-6.7l1.01-4.86.03-.32a1.7 1.7 0 0 0-.5-1.2L12.6 0 5.98 6.58A2 2 0 0 0 5.4 8v11c0 1.1.9 2 2 2h9.55c.82 0 1.56-.5 1.87-1.26l3.03-7.05c.1-.24.15-.49.15-.75V9.1Z",
+    dislike:
+      "M22 3h-4v12h4V3ZM2 14.9C2 16.06 2.95 17 4.12 17h6.7l-1.01 4.86-.03.32c0 .45.18.88.5 1.2L11.4 24l6.62-6.58c.38-.37.58-.88.58-1.42V5c0-1.1-.9-2-2-2H7.05c-.82 0-1.56.5-1.87 1.26L2.15 11.3c-.1.24-.15.49-.15.75v2.85Z"
+  };
+
+  return iconPaths[name] || iconPaths.like;
+}
+
+function createCommentsSection(post, currentUserId, onPostChange) {
   const section = createElement("section", { className: "comments-section" });
   const comments = getCommentsForPost(post.id);
-  const sortOrder = commentUiState.sortOrders.get(post.id) || "oldest";
+  const sortOrder = commentUiState.sortOrders.get(post.id) || "newest";
   const commentTree = buildCommentTree(comments, sortOrder);
   const panelIsOpen = commentUiState.openPanels.has(post.id);
   const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
 
   const header = createElement("div", { className: "comments-header" });
-  const heading = createElement("h4", {
-    className: "comments-title",
-    text: "Conversation"
-  });
 
   const toggleBtn = createElement("button", {
     className: `comment-toggle-btn${panelIsOpen ? " comment-toggle-btn-active" : ""}`,
@@ -235,8 +478,8 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     });
 
     [
-      { value: "oldest", label: "Oldest first" },
-      { value: "newest", label: "Newest first" }
+      { value: "newest", label: "Newest first" },
+      { value: "oldest", label: "Oldest first" }
     ].forEach(({ value, label }) => {
       const option = document.createElement("option");
       option.value = value;
@@ -248,8 +491,8 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     sortSelect.addEventListener("change", () => {
       commentUiState.sortOrders.set(post.id, sortSelect.value);
 
-      if (typeof onReactionChange === "function") {
-        onReactionChange();
+      if (typeof onPostChange === "function") {
+        onPostChange();
       }
     });
 
@@ -257,7 +500,14 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     controls.appendChild(sortLabel);
   }
 
-  const panel = createElement("div", { className: "comments-panel" });
+  const panel = createElement("div", {
+    className: "comments-panel",
+    attributes: {
+      tabindex: "-1",
+      "aria-label": "Comments panel"
+    }
+  });
+  panel.classList.toggle("comments-panel-empty", commentTree.length === 0);
   setToggleDisplay(panel, panelIsOpen);
 
   const composerActions = createElement("div", { className: "comments-composer-actions" });
@@ -294,8 +544,8 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
       commentUiState.openPanels.add(post.id);
       commentUiState.openCommentForms.delete(post.id);
 
-      if (typeof onReactionChange === "function") {
-        onReactionChange();
+      if (typeof onPostChange === "function") {
+        onPostChange();
       }
     }
   });
@@ -318,7 +568,7 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
           postId: post.id,
           node: commentNode,
           currentUserId,
-          onCommentChange: onReactionChange,
+          onCommentChange: onPostChange,
           depth: 0
         })
       );
@@ -328,18 +578,16 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
   toggleBtn.addEventListener("click", () => {
     const nextOpen = panel.style.display === "none";
 
-    setToggleDisplay(panel, nextOpen);
-    toggleBtn.classList.toggle("comment-toggle-btn-active", nextOpen);
-    toggleBtn.textContent = getCommentsToggleLabel(nextOpen, comments.length);
-
     if (nextOpen) {
+      closeOtherCommentsPanels(post.id);
+      setToggleDisplay(panel, true);
+      toggleBtn.classList.add("comment-toggle-btn-active");
+      toggleBtn.textContent = getCommentsToggleLabel(true, comments.length);
+      commentUiState.openPanels.clear();
       commentUiState.openPanels.add(post.id);
+      focusCommentsPanel(panel);
     } else {
-      commentUiState.openPanels.delete(post.id);
-      commentUiState.openCommentForms.delete(post.id);
-      resetCommentForm(topLevelForm);
-      setToggleDisplay(topLevelForm, false);
-      composerToggleBtn.textContent = "Add comment";
+      closeCommentsPanel(post.id);
     }
   });
 
@@ -358,16 +606,40 @@ function createCommentsSection(post, currentUserId, onReactionChange) {
     }
   });
 
-  header.append(heading, controls);
+  commentUiState.panelEntries.set(post.id, {
+    panel,
+    toggleBtn,
+    topLevelForm,
+    composerToggleBtn,
+    getCommentsCount: () => getCommentsForPost(post.id).length
+  });
+
+  header.appendChild(controls);
   panel.append(composerActions, topLevelForm, commentsList);
   section.append(header, panel);
 
   return section;
 }
 
-function createCommentNode({ postId, node, currentUserId, onCommentChange, depth }) {
-  const thread = createElement("div", { className: "comment-thread" });
-  thread.style.setProperty("--comment-depth", String(depth));
+function createCommentNode({
+  postId,
+  node,
+  currentUserId,
+  onCommentChange,
+  depth,
+  parentAuthorName = ""
+}) {
+  const threadLevelClass =
+    depth === 0
+      ? " comment-thread-root"
+      : depth === 1
+        ? " comment-thread-reply-lane"
+        : " comment-thread-flat-reply";
+  const thread = createElement("div", {
+    className: `comment-thread${threadLevelClass}`
+  });
+  thread.style.setProperty("--comment-depth", String(depth > 0 ? 1 : 0));
+  thread.dataset.commentId = node.id;
 
   const author = findUserById(node.userId);
   const isOwner = node.userId === currentUserId;
@@ -402,10 +674,14 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
       }),
     onSuccess: () => {
       commentUiState.openReplyForms.delete(node.id);
-      commentUiState.openReplyLists.delete(node.id);
+      commentUiState.openReplyLists.add(node.id);
 
       if (typeof onCommentChange === "function") {
-        onCommentChange();
+        const latestComments = getCommentsForPost(postId);
+        const latestReply = findLatestReplyForParent(latestComments, node.id, currentUserId);
+        onCommentChange({
+          focusCommentId: latestReply?.id || null
+        });
       }
     }
   });
@@ -455,35 +731,58 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
           node: childNode,
           currentUserId,
           onCommentChange,
-          depth: depth + 1
+          depth: depth + 1,
+          parentAuthorName: author?.username || ""
         })
       );
     });
   }
 
-  const reactionBar = createReactionBar({
-    reactions: node.reactions,
-    activeReaction: getCommentUserReaction(node, currentUserId),
-    compact: true,
-    onReact: (reactionType) => {
-      setCommentReaction({
-        postId,
-        commentId: node.id,
-        userId: currentUserId,
-        reactionType
-      });
+  let reactionBar = null;
 
-      if (typeof onCommentChange === "function") {
-        onCommentChange();
-      }
-    }
-  });
+  const handleCommentReaction = (reactionType) => {
+    const updatedComment = setCommentReaction({
+      postId,
+      commentId: node.id,
+      userId: currentUserId,
+      reactionType
+    });
+
+    node.reactions = updatedComment.reactions;
+
+    const nextReactionBar = buildCommentReactionBar();
+    reactionBar.replaceWith(nextReactionBar);
+    reactionBar = nextReactionBar;
+  };
+
+  function buildCommentReactionBar() {
+    return createReactionBar({
+      reactions: node.reactions,
+      activeReaction: getCommentUserReaction(node, currentUserId),
+      compact: true,
+      iconOnly: true,
+      allowedReactions: ["like", "dislike"],
+      onReact: handleCommentReaction
+    });
+  }
+
+  reactionBar = buildCommentReactionBar();
 
   const commentCard = createCommentCard(node, author, {
     isReply: depth > 0,
+    replyingTo: depth > 0 ? parentAuthorName : "",
     repliesCount: node.children.length,
     repliesExpanded: repliesListIsOpen,
     reactionBar,
+    onOpenProfile:
+      author?.id
+        ? () => {
+            showUserPreviewSheet({
+              userId: author.id,
+              currentUserId
+            });
+          }
+        : null,
     onReply: () => {
       commentUiState.openEditForms.delete(node.id);
       if (editForm) {
@@ -514,53 +813,61 @@ function createCommentNode({ postId, node, currentUserId, onCommentChange, depth
             }
           }
         : null,
-    onEdit: canEditComment
-      ? () => {
-          commentUiState.openReplyForms.delete(node.id);
-          setToggleDisplay(replyForm, false);
+    onOpenMenu: () =>
+      openCommentActionSheet({
+        comment: node,
+        author,
+        isOwner,
+        canEditComment,
+        onEdit:
+          canEditComment && editForm
+            ? () => {
+                commentUiState.openReplyForms.delete(node.id);
+                setToggleDisplay(replyForm, false);
 
-          const nextOpen = editForm.style.display === "none";
-          setToggleDisplay(editForm, nextOpen);
+                const nextOpen = editForm.style.display === "none";
+                setToggleDisplay(editForm, nextOpen);
 
-          if (nextOpen) {
-            commentUiState.openEditForms.add(node.id);
-          } else {
-            commentUiState.openEditForms.delete(node.id);
-          }
-        }
-      : null,
-    onDelete: isOwner
-      ? () => {
-          const descendantCount = countDescendants(node);
-
-          showConfirmDialog({
-            title: "Delete comment?",
-            message:
-              descendantCount > 0
-                ? "This comment and all nested replies will be permanently removed."
-                : "This comment will be permanently removed.",
-            confirmText: "Delete",
-            cancelText: "Cancel",
-            danger: true,
-            onConfirm: () => {
-              try {
-                deleteCommentFromPost({
-                  postId,
-                  commentId: node.id,
-                  userId: currentUserId
-                });
-                clearCommentUiState(node);
-
-                if (typeof onCommentChange === "function") {
-                  onCommentChange();
+                if (nextOpen) {
+                  commentUiState.openEditForms.add(node.id);
+                } else {
+                  commentUiState.openEditForms.delete(node.id);
                 }
-              } catch (error) {
-                console.error(error);
               }
+            : null,
+        onDelete: isOwner
+          ? () => {
+              const descendantCount = countDescendants(node);
+
+              showConfirmDialog({
+                title: "Delete comment?",
+                message:
+                  descendantCount > 0
+                    ? "This comment and all nested replies will be permanently removed."
+                    : "This comment will be permanently removed.",
+                confirmText: "Delete",
+                cancelText: "Cancel",
+                danger: true,
+                onConfirm: () => {
+                  try {
+                    deleteCommentFromPost({
+                      postId,
+                      commentId: node.id,
+                      userId: currentUserId
+                    });
+                    clearCommentUiState(node);
+
+                    if (typeof onCommentChange === "function") {
+                      onCommentChange();
+                    }
+                  } catch (error) {
+                    console.error(error);
+                  }
+                }
+              });
             }
-          });
-        }
-      : null
+          : null
+      })
   });
 
   thread.append(commentCard);
@@ -608,6 +915,11 @@ function createCommentForm({
   textarea.id = inputId;
   textarea.value = initialValue;
   const textModeFields = createElement("div", { className: "comment-input-mode-panel" });
+  const textMetaRow = createElement("div", { className: "comment-form-meta-row" });
+  const charCounter = createElement("span", {
+    className: "char-counter",
+    text: `0 / ${textarea.maxLength}`
+  });
 
   const helper = createElement("p", {
     className: "field-helper",
@@ -638,20 +950,23 @@ function createCommentForm({
     }
   };
 
-  let voiceNoteStatus = null;
+  let voiceNoteShell = null;
   let voiceNoteTimer = null;
   let voiceNoteAudio = null;
   let voiceNotePrimaryBtn = null;
-  let voiceNoteStopBtn = null;
-  let voiceNoteClearBtn = null;
+  let voiceNoteSpeedBtn = null;
   let voiceNoteMeter = null;
   let voiceNoteWaveform = null;
   let voiceNoteProgressLine = null;
+  let voiceNoteStateDot = null;
   let voiceNoteVisualizer = null;
   let voiceNoteLiveSession = null;
+  let resumeVoicePreviewAfterSeek = false;
+  let voiceNotePlaybackRate = 1;
+  let previewProgressAnimationFrameId = null;
 
   const updateVoiceNoteComposer = () => {
-    if (!voiceNoteStatus) {
+    if (!voiceNoteTimer || !voiceNotePrimaryBtn || !voiceNoteMeter) {
       return;
     }
 
@@ -660,13 +975,9 @@ function createCommentForm({
     const isPreviewPlaying = Boolean(
       voiceNoteAudio && !voiceNoteAudio.paused && !voiceNoteAudio.ended
     );
-    const maxDurationLabel = `${formatVoiceNoteDuration(MAX_VOICE_NOTE_DURATION_MS)} minute`;
+    const maxDurationLabel = formatVoiceNoteDuration(MAX_VOICE_NOTE_DURATION_MS);
 
-    voiceNotePrimaryBtn.disabled = submissionMode !== "voice" || isRecording;
-    voiceNoteStopBtn.disabled =
-      submissionMode !== "voice" || (!isRecording && !isPreviewPlaying);
-    voiceNoteClearBtn.disabled =
-      submissionMode !== "voice" || (!isRecording && !hasVoiceNote);
+    voiceNotePrimaryBtn.disabled = submissionMode !== "voice";
 
     if (submitBtn) {
       submitBtn.disabled = isRecording;
@@ -674,71 +985,116 @@ function createCommentForm({
 
     if (voiceNoteAudio) {
       configureVoiceNoteAudio(voiceNoteAudio, hasVoiceNote ? voiceNoteDraft.dataUrl : "");
+      voiceNoteAudio.playbackRate = voiceNotePlaybackRate;
     }
 
     if (voiceNoteMeter) {
-      voiceNoteMeter.classList.toggle("voice-note-meter-recording", isRecording);
-      voiceNoteMeter.classList.toggle("voice-note-meter-playing", isPreviewPlaying);
+      voiceNoteMeter.classList.toggle("voice-note-bubble-recording", isRecording);
+      voiceNoteMeter.classList.toggle("voice-note-bubble-playing", isPreviewPlaying);
     }
 
-    if (voiceNotePrimaryBtn) {
-      const primaryConfig = hasVoiceNote
+    if (voiceNoteStateDot) {
+      voiceNoteStateDot.classList.toggle("voice-note-state-dot-active", isRecording);
+      setToggleDisplay(voiceNoteStateDot, isRecording);
+    }
+
+    if (voiceNoteSpeedBtn) {
+      voiceNoteSpeedBtn.textContent = formatVoiceNotePlaybackRate(voiceNotePlaybackRate);
+      voiceNoteSpeedBtn.disabled = submissionMode !== "voice" || isRecording || !hasVoiceNote;
+      setToggleDisplay(voiceNoteSpeedBtn, submissionMode === "voice" && hasVoiceNote);
+    }
+
+    voiceNotePrimaryBtn.classList.toggle("voice-note-main-btn-recording", isRecording);
+    voiceNotePrimaryBtn.classList.toggle(
+      "voice-note-main-btn-playback",
+      hasVoiceNote && !isRecording
+    );
+    voiceNotePrimaryBtn.classList.toggle(
+      "voice-note-main-btn-ready",
+      !hasVoiceNote && !isRecording
+    );
+
+    const primaryConfig = isRecording
+      ? {
+          icon: "stop",
+          label: "Stop recording voice note"
+        }
+      : hasVoiceNote
         ? isPreviewPlaying
           ? {
-              text: "\u23F8",
+              icon: "pause",
               label: "Pause voice note preview"
             }
           : {
-              text: "\u25B6",
+              icon: "play",
               label: "Play voice note preview"
             }
         : {
-            text: "\u{1F3A4}",
+            icon: "mic",
             label: "Record voice note"
           };
 
-      voiceNotePrimaryBtn.textContent = primaryConfig.text;
-      voiceNotePrimaryBtn.setAttribute("aria-label", primaryConfig.label);
-      voiceNotePrimaryBtn.title = primaryConfig.label;
-    }
+    setVoiceNoteControlIcon(voiceNotePrimaryBtn, primaryConfig.icon);
+    voiceNotePrimaryBtn.setAttribute("aria-label", primaryConfig.label);
+    voiceNotePrimaryBtn.title = primaryConfig.label;
 
     if (submissionMode !== "voice") {
-      voiceNoteStatus.textContent = "\u{1F3A4} Switch to voice note mode to record.";
-      if (voiceNoteTimer) {
-        voiceNoteTimer.textContent = `Max ${maxDurationLabel}`;
-      }
+      voiceNoteTimer.textContent = `0:00 / ${maxDurationLabel}`;
       return;
     }
 
     if (isRecording) {
       const elapsedMs = Math.min(Date.now() - recordingStartedAt, MAX_VOICE_NOTE_DURATION_MS);
-      voiceNoteStatus.textContent = "\u{1F534} Recording voice note...";
-      if (voiceNoteTimer) {
-        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(elapsedMs)} / Max ${maxDurationLabel}`;
-      }
-      return;
-    }
-
-    if (hasVoiceNote && isPreviewPlaying) {
-      voiceNoteStatus.textContent = "\u{1F50A} Playing preview...";
-      if (voiceNoteTimer) {
-        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(voiceNoteAudio.currentTime * 1000)} / ${formatVoiceNoteDuration(voiceNoteDraft.durationMs)}`;
-      }
+      voiceNoteTimer.textContent = `${formatVoiceNoteDuration(elapsedMs)} / ${maxDurationLabel}`;
       return;
     }
 
     if (hasVoiceNote) {
-      voiceNoteStatus.textContent = "\u{1F50A} Preview your voice note before posting.";
-      if (voiceNoteTimer) {
-        voiceNoteTimer.textContent = `${formatVoiceNoteDuration(voiceNoteDraft.durationMs)} recorded`;
-      }
+      const currentPreviewMs = Math.max(0, (voiceNoteAudio?.currentTime || 0) * 1000);
+      voiceNoteTimer.textContent =
+        `${formatVoiceNoteDuration(currentPreviewMs)} / ${formatVoiceNoteDuration(voiceNoteDraft.durationMs)}`;
       return;
     }
 
-    voiceNoteStatus.textContent = "\u{1F3A4} Ready to record a voice note.";
-    if (voiceNoteTimer) {
-      voiceNoteTimer.textContent = `Max ${maxDurationLabel}`;
+    voiceNoteTimer.textContent = `0:00 / ${maxDurationLabel}`;
+  };
+
+  const resetVoiceNotePlaybackRate = () => {
+    voiceNotePlaybackRate = 1;
+
+    if (voiceNoteAudio) {
+      voiceNoteAudio.playbackRate = voiceNotePlaybackRate;
     }
+
+    if (voiceNoteSpeedBtn) {
+      voiceNoteSpeedBtn.textContent = formatVoiceNotePlaybackRate(voiceNotePlaybackRate);
+    }
+  };
+
+  const stopPreviewProgressAnimation = () => {
+    if (previewProgressAnimationFrameId) {
+      window.cancelAnimationFrame(previewProgressAnimationFrameId);
+      previewProgressAnimationFrameId = null;
+    }
+  };
+
+  const startPreviewProgressAnimation = () => {
+    if (previewProgressAnimationFrameId) {
+      return;
+    }
+
+    const tick = () => {
+      syncVoiceNotePreview();
+
+      if (voiceNoteAudio && !voiceNoteAudio.paused && !voiceNoteAudio.ended) {
+        previewProgressAnimationFrameId = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      previewProgressAnimationFrameId = null;
+    };
+
+    previewProgressAnimationFrameId = window.requestAnimationFrame(tick);
   };
 
   const syncVoiceNotePreview = () => {
@@ -766,6 +1122,7 @@ function createCommentForm({
       return;
     }
 
+    stopPreviewProgressAnimation();
     voiceNoteAudio.pause();
     voiceNoteAudio.currentTime = 0;
     syncVoiceNotePreview();
@@ -787,6 +1144,7 @@ function createCommentForm({
     stopVoiceNotePreview();
 
     voiceNoteDraft = null;
+    resetVoiceNotePlaybackRate();
 
     if (voiceNoteVisualizer) {
       voiceNoteVisualizer.renderStoredWaveform({
@@ -827,10 +1185,19 @@ function createCommentForm({
     }
 
     if (submitBtn) {
-      submitBtn.textContent = submissionMode === "voice" ? "Post voice note" : submitText;
+      submitBtn.textContent = submissionMode === "voice" ? "Post" : submitText;
     }
 
     updateVoiceNoteComposer();
+  };
+
+  const syncCharacterCounter = () => {
+    const currentLength = textarea.value.length;
+    charCounter.textContent = `${currentLength} / ${textarea.maxLength}`;
+    charCounter.className =
+      currentLength >= textarea.maxLength
+        ? "char-counter char-counter-limit"
+        : "char-counter";
   };
 
   if (hasVoiceMode) {
@@ -849,12 +1216,13 @@ function createCommentForm({
     textModeBtn.addEventListener("click", () => {
       clearFormErrors(form);
       updateSubmissionMode("text");
-      textarea.focus();
+      focusActiveCommentTarget();
     });
 
     voiceModeBtn.addEventListener("click", () => {
       clearFormErrors(form);
       updateSubmissionMode("voice");
+      focusActiveCommentTarget();
     });
 
     modeSwitch.append(textModeBtn, voiceModeBtn);
@@ -864,12 +1232,12 @@ function createCommentForm({
     voiceNoteComposer = createElement("div", {
       className: "voice-note-composer"
     });
-    const voiceNoteControls = createElement("div", {
-      className: "voice-note-controls"
+    voiceNoteShell = createElement("div", {
+      className: "voice-note-shell"
     });
 
     voiceNotePrimaryBtn = createElement("button", {
-      className: "secondary-btn voice-note-btn voice-note-icon-btn",
+      className: "voice-note-btn voice-note-icon-btn voice-note-main-btn",
       type: "button",
       text: "\u{1F3A4}",
       attributes: {
@@ -878,38 +1246,20 @@ function createCommentForm({
       }
     });
 
-    voiceNoteStopBtn = createElement("button", {
-      className: "secondary-btn voice-note-btn voice-note-icon-btn",
-      type: "button",
-      text: "\u25A0",
-      attributes: {
-        "aria-label": "Stop voice note",
-        title: "Stop voice note"
-      }
-    });
-
-    voiceNoteClearBtn = createElement("button", {
-      className: "secondary-btn voice-note-btn voice-note-icon-btn voice-note-clear-btn",
-      type: "button",
-      text: "\u{1F5D1}",
-      attributes: {
-        "aria-label": "Clear voice note",
-        title: "Clear voice note"
-      }
-    });
-
-    voiceNoteStatus = createElement("p", {
-      className: "voice-note-status"
-    });
     voiceNoteTimer = createElement("p", {
       className: "voice-note-timer"
     });
-    voiceNoteMeter = createElement("div", {
-      className: "voice-note-meter"
+    voiceNoteSpeedBtn = createElement("button", {
+      className: "voice-note-speed-btn",
+      type: "button",
+      text: formatVoiceNotePlaybackRate(voiceNotePlaybackRate),
+      attributes: {
+        "aria-label": "Change voice note playback speed",
+        title: "Change voice note playback speed"
+      }
     });
-    const voiceNoteIndicator = createElement("span", {
-      className: "voice-note-indicator",
-      text: "\u{1F399}"
+    voiceNoteMeter = createElement("div", {
+      className: "voice-note-bubble voice-note-bubble-draft voice-note-meter voice-note-meter-seekable"
     });
     voiceNoteWaveform = createElement("div", {
       className: "voice-note-waveform"
@@ -917,18 +1267,39 @@ function createCommentForm({
     voiceNoteProgressLine = createElement("span", {
       className: "voice-note-progress-line"
     });
+    const voiceNoteMeta = createElement("div", {
+      className: "voice-note-meta"
+    });
+    voiceNoteStateDot = createElement("span", {
+      className: "voice-note-state-dot",
+      attributes: {
+        "aria-hidden": "true"
+      }
+    });
     voiceNoteWaveform.appendChild(voiceNoteProgressLine);
     voiceNoteVisualizer = createVoiceNoteVisualizer({
       waveformElement: voiceNoteWaveform,
       progressLineElement: voiceNoteProgressLine
     });
 
-    voiceNoteMeter.append(voiceNoteIndicator, voiceNoteWaveform, voiceNoteTimer);
+    voiceNoteMeta.append(voiceNoteStateDot, voiceNoteTimer, voiceNoteSpeedBtn);
+    voiceNoteMeter.append(voiceNotePrimaryBtn, voiceNoteWaveform, voiceNoteMeta);
+    voiceNoteShell.append(voiceNoteMeter);
 
     voiceNoteAudio = document.createElement("audio");
     voiceNoteAudio.className = "voice-note-audio";
     configureVoiceNoteAudio(voiceNoteAudio);
-    ["play", "pause", "ended", "timeupdate", "loadedmetadata"].forEach((eventName) => {
+    voiceNoteAudio.addEventListener("play", () => {
+      startPreviewProgressAnimation();
+      syncVoiceNotePreview();
+    });
+    ["pause", "ended"].forEach((eventName) => {
+      voiceNoteAudio.addEventListener(eventName, () => {
+        stopPreviewProgressAnimation();
+        syncVoiceNotePreview();
+      });
+    });
+    ["timeupdate", "loadedmetadata"].forEach((eventName) => {
       voiceNoteAudio.addEventListener(eventName, syncVoiceNotePreview);
     });
 
@@ -950,10 +1321,16 @@ function createCommentForm({
 
       voiceNoteRecorder = null;
       stopVoiceNotePreview();
+      resetVoiceNotePlaybackRate();
       syncVoiceNotePreview();
     };
 
     voiceNotePrimaryBtn.addEventListener("click", async () => {
+      if (voiceNoteRecorder) {
+        voiceNoteRecorder.stop();
+        return;
+      }
+
       if (voiceNoteDraft?.dataUrl) {
         try {
           if (voiceNoteAudio.paused || voiceNoteAudio.ended) {
@@ -970,10 +1347,6 @@ function createCommentForm({
         }
 
         syncVoiceNotePreview();
-        return;
-      }
-
-      if (voiceNoteRecorder) {
         return;
       }
 
@@ -1019,23 +1392,54 @@ function createCommentForm({
       }
     });
 
-    voiceNoteStopBtn.addEventListener("click", () => {
-      if (voiceNoteRecorder) {
-        voiceNoteRecorder.stop();
-        return;
-      }
+    attachVoiceNoteScrubber({
+      scrubElement: voiceNoteMeter,
+      isEnabled: () => submissionMode === "voice" && Boolean(voiceNoteDraft?.durationMs),
+      getDurationMs: () => voiceNoteDraft?.durationMs || 0,
+      onSeekStart: () => {
+        resumeVoicePreviewAfterSeek =
+          Boolean(voiceNoteAudio) && !voiceNoteAudio.paused && !voiceNoteAudio.ended;
 
-      if (voiceNoteDraft?.dataUrl) {
-        stopVoiceNotePreview();
+        if (voiceNoteAudio) {
+          voiceNoteAudio.pause();
+        }
+      },
+      onSeek: ({ timeMs }) => {
+        if (!voiceNoteAudio) {
+          return;
+        }
+
+        voiceNoteAudio.currentTime = timeMs / 1000;
+        syncVoiceNotePreview();
+      },
+      onSeekEnd: async () => {
+        if (resumeVoicePreviewAfterSeek && voiceNoteAudio) {
+          try {
+            await voiceNoteAudio.play();
+          } catch (error) {
+            setFieldError(
+              inputId,
+              error.message || "Could not continue voice note preview."
+            );
+          }
+        }
+
+        resumeVoicePreviewAfterSeek = false;
+        syncVoiceNotePreview();
       }
     });
 
-    voiceNoteClearBtn.addEventListener("click", () => {
-      clearVoiceNoteComposer();
+    voiceNoteSpeedBtn.addEventListener("click", () => {
+      voiceNotePlaybackRate = getNextVoiceNotePlaybackRate(voiceNotePlaybackRate);
+
+      if (voiceNoteAudio) {
+        voiceNoteAudio.playbackRate = voiceNotePlaybackRate;
+      }
+
+      updateVoiceNoteComposer();
     });
 
-    voiceNoteControls.append(voiceNotePrimaryBtn, voiceNoteStopBtn, voiceNoteClearBtn);
-    voiceNoteComposer.append(voiceNoteControls, voiceNoteMeter, voiceNoteStatus, voiceNoteAudio);
+    voiceNoteComposer.append(voiceNoteShell, voiceNoteAudio);
   }
 
   if (cancelText && typeof onCancel === "function") {
@@ -1056,7 +1460,9 @@ function createCommentForm({
   });
   actions.appendChild(submitBtn);
 
-  textModeFields.append(textarea, helper);
+  textarea.addEventListener("input", syncCharacterCounter);
+  textMetaRow.appendChild(charCounter);
+  textModeFields.append(textMetaRow, textarea, helper);
 
   if (modeSwitch) {
     inputWrapper.appendChild(modeSwitch);
@@ -1074,15 +1480,18 @@ function createCommentForm({
 
   inputWrapper.appendChild(error);
   form.append(inputWrapper, actions);
+  form._focusCommentTarget = focusActiveCommentTarget;
   form._resetCommentForm = () => {
     submissionMode = "text";
     textarea.value = initialValue;
     clearFormErrors(form);
     clearVoiceNoteComposer();
     updateSubmissionMode("text");
+    syncCharacterCounter();
   };
 
   updateSubmissionMode("text");
+  syncCharacterCounter();
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1113,6 +1522,26 @@ function createCommentForm({
   });
 
   return form;
+
+  function focusActiveCommentTarget() {
+    window.requestAnimationFrame(() => {
+      if (submissionMode === "voice" && voiceNotePrimaryBtn && !voiceNotePrimaryBtn.disabled) {
+        voiceNotePrimaryBtn.focus({ preventScroll: true });
+        return;
+      }
+
+      if (!textarea.disabled) {
+        textarea.focus({ preventScroll: true });
+        const caretPosition = textarea.value.length;
+        textarea.setSelectionRange(caretPosition, caretPosition);
+        return;
+      }
+
+      if (voiceModeBtn) {
+        voiceModeBtn.focus({ preventScroll: true });
+      }
+    });
+  }
 }
 
 function clearCommentUiState(node) {
@@ -1123,6 +1552,79 @@ function clearCommentUiState(node) {
   node.children.forEach((childNode) => {
     clearCommentUiState(childNode);
   });
+}
+
+function openCommentActionSheet({
+  comment,
+  author,
+  isOwner,
+  canEditComment,
+  onEdit,
+  onDelete
+}) {
+  showActionSheet({
+    title: "Comment",
+    actions: [
+      {
+        label: "Share",
+        onSelect: () => shareCommentEntry(comment, author)
+      },
+      {
+        label: "Report",
+        onSelect: () => {
+          showToast("Report flow coming soon.", "success");
+        }
+      },
+      ...(isOwner && canEditComment && typeof onEdit === "function"
+        ? [
+            {
+              label: "Edit",
+              onSelect: onEdit
+            }
+          ]
+        : []),
+      ...(isOwner && typeof onDelete === "function"
+        ? [
+            {
+              label: "Delete",
+              danger: true,
+              onSelect: onDelete
+            }
+          ]
+        : [])
+    ]
+  });
+}
+
+async function shareCommentEntry(comment, author) {
+  const authorName = author?.username || "Unknown User";
+  const shareText = comment?.content
+    ? `${authorName}: ${comment.content}`
+    : `${authorName} shared a voice note on Boitekong Now.`;
+
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      await navigator.share({
+        title: "Comment",
+        text: shareText
+      });
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareText);
+      showToast("Comment copied to clipboard.", "success");
+      return;
+    }
+
+    throw new Error("Sharing is not available on this device.");
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return;
+    }
+
+    showToast(error.message || "Could not share comment.", "error");
+  }
 }
 
 function setToggleDisplay(element, isVisible) {
@@ -1147,7 +1649,115 @@ function resetCommentForm(form, initialValue = "") {
 }
 
 function focusCommentForm(form) {
-  form?.querySelector("textarea")?.focus();
+  if (!form) {
+    return;
+  }
+
+  form.scrollIntoView({
+    behavior: "smooth",
+    block: "nearest"
+  });
+
+  if (typeof form._focusCommentTarget === "function") {
+    form._focusCommentTarget();
+    return;
+  }
+
+  const textarea = form.querySelector("textarea");
+
+  window.requestAnimationFrame(() => {
+    textarea?.focus({ preventScroll: true });
+  });
+}
+
+function focusCommentsPanel(panel) {
+  if (!panel) {
+    return;
+  }
+
+  panel.scrollIntoView({
+    behavior: "smooth",
+    block: "start"
+  });
+
+  window.requestAnimationFrame(() => {
+    panel.focus({ preventScroll: true });
+  });
+}
+
+function focusCommentById(postId, commentId) {
+  if (!postId || !commentId) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    const postCard = findPostCardById(postId);
+    const commentTarget = postCard?.querySelector(`[data-comment-id="${commentId}"]`);
+
+    if (!commentTarget) {
+      return;
+    }
+
+    commentTarget.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    });
+  });
+}
+
+function closeOtherCommentsPanels(currentPostId) {
+  for (const [postId, entry] of commentUiState.panelEntries.entries()) {
+    if (!entry?.panel?.isConnected) {
+      commentUiState.panelEntries.delete(postId);
+      continue;
+    }
+
+    if (postId === currentPostId) {
+      continue;
+    }
+
+    closeCommentsPanel(postId);
+  }
+}
+
+function closeCommentsPanel(postId) {
+  const entry = commentUiState.panelEntries.get(postId);
+
+  commentUiState.openPanels.delete(postId);
+  commentUiState.openCommentForms.delete(postId);
+
+  if (!entry || !entry.panel?.isConnected) {
+    commentUiState.panelEntries.delete(postId);
+    return;
+  }
+
+  setToggleDisplay(entry.panel, false);
+  entry.toggleBtn.classList.remove("comment-toggle-btn-active");
+  entry.toggleBtn.textContent = getCommentsToggleLabel(
+    false,
+    typeof entry.getCommentsCount === "function" ? entry.getCommentsCount() : 0
+  );
+
+  if (entry.topLevelForm) {
+    resetCommentForm(entry.topLevelForm);
+    setToggleDisplay(entry.topLevelForm, false);
+  }
+
+  if (entry.composerToggleBtn) {
+    entry.composerToggleBtn.textContent = "Add comment";
+  }
+}
+
+function findLatestReplyForParent(comments, parentId, userId) {
+  return comments
+    .filter((comment) => comment.parentId === parentId && comment.userId === userId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
+}
+
+function findPostCardById(postId) {
+  return Array.from(document.querySelectorAll(".post-card")).find(
+    (postCard) => postCard.dataset.postId === postId
+  );
 }
 
 function createPostContent(post) {

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Boitekong Now app icon">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#1e40af"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#dbeafe" stop-opacity="0.92"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bg)"/>
+  <circle cx="34" cy="34" r="20" fill="#ffffff" fill-opacity="0.12"/>
+  <path d="M21 75h14l8-18 11 31 10-21 9 12h34" fill="none" stroke="url(#wave)" stroke-linecap="round" stroke-linejoin="round" stroke-width="8"/>
+  <text x="64" y="46" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="23" font-weight="800" fill="#ffffff">BN</text>
+</svg>

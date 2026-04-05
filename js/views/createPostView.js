@@ -16,14 +16,24 @@ export function renderCreatePost(app, currentUser) {
   clearElement(app);
 
   const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser);
+  const navbar = createNavbar(currentUser, "create-post");
 
-  const main = createElement("main", { className: "profile-main" });
+  const main = createElement("main", { className: "profile-main editor-main" });
 
-  const infoCard = createElement("section", { className: "profile-card" });
-  const infoTitle = createElement("h2", { text: "Create Post" });
+  const infoCard = createElement("section", {
+    className: "profile-card editor-card editor-brief-card"
+  });
+  const infoEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Start a conversation"
+  });
+  const infoTitle = createElement("h2", {
+    className: "section-title",
+    text: "Create a local update"
+  });
   const infoText = createElement("p", {
-    text: "Share a text post with your B-Point. Image URL is optional for now."
+    className: "section-copy",
+    text: "Share something timely, useful, or human. Keep it local, clear, and worth a neighbor's tap."
   });
 
   const tipsList = createElement("ul", { className: "helper-list" });
@@ -37,10 +47,23 @@ export function renderCreatePost(app, currentUser) {
     tipsList.appendChild(item);
   });
 
-  infoCard.append(infoTitle, infoText, tipsList);
+  infoCard.append(infoEyebrow, infoTitle, infoText, tipsList);
 
-  const formCard = createElement("section", { className: "profile-card" });
-  const formTitle = createElement("h2", { text: "New Post" });
+  const formCard = createElement("section", {
+    className: "profile-card editor-card editor-form-card"
+  });
+  const formEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Post composer"
+  });
+  const formTitle = createElement("h2", {
+    className: "section-title",
+    text: "New post"
+  });
+  const formText = createElement("p", {
+    className: "section-copy",
+    text: "Your B-Point is prefilled so you can post fast on mobile."
+  });
 
   const form = createElement("form", {
     className: "auth-form",
@@ -50,7 +73,7 @@ export function renderCreatePost(app, currentUser) {
   const contentField = createTextAreaField({
     labelText: "Post Content",
     inputId: "post-content",
-    placeholder: "What is happening in your area? \nWhat is on your mind ?",
+    placeholder: "What's happening in your area?\nWhat's on your mind?",
     value: ""
   });
 
@@ -103,7 +126,7 @@ export function renderCreatePost(app, currentUser) {
 
   actions.append(cancelBtn, submitBtn);
   form.append(contentField, imageField, townshipField, extensionField, actions);
-  formCard.append(formTitle, form);
+  formCard.append(formEyebrow, formTitle, formText, form);
   main.append(infoCard, formCard);
 
   shell.append(navbar, main);

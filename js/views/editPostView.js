@@ -31,20 +31,43 @@ export function renderEditPost(app, currentUser, payload) {
   }
 
   const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser);
+  const navbar = createNavbar(currentUser, "create-post");
 
-  const main = createElement("main", { className: "profile-main" });
+  const main = createElement("main", { className: "profile-main editor-main" });
 
-  const infoCard = createElement("section", { className: "profile-card" });
-  const infoTitle = createElement("h2", { text: "Edit Post" });
+  const infoCard = createElement("section", {
+    className: "profile-card editor-card editor-brief-card"
+  });
+  const infoEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Refine your message"
+  });
+  const infoTitle = createElement("h2", {
+    className: "section-title",
+    text: "Edit your post"
+  });
   const infoText = createElement("p", {
-    text: "Update your content and B-Point. Created time stays the same."
+    className: "section-copy",
+    text: "Tighten the wording, refresh the details, and keep the update sharp for people in your area."
   });
 
-  infoCard.append(infoTitle, infoText);
+  infoCard.append(infoEyebrow, infoTitle, infoText);
 
-  const formCard = createElement("section", { className: "profile-card" });
-  const formTitle = createElement("h2", { text: "Update Post" });
+  const formCard = createElement("section", {
+    className: "profile-card editor-card editor-form-card"
+  });
+  const formEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Editing"
+  });
+  const formTitle = createElement("h2", {
+    className: "section-title",
+    text: "Update post"
+  });
+  const formText = createElement("p", {
+    className: "section-copy",
+    text: "Your original created time stays intact, so focus only on what needs to change."
+  });
 
   const form = createElement("form", {
     className: "auth-form",
@@ -108,7 +131,7 @@ export function renderEditPost(app, currentUser, payload) {
   actions.append(cancelBtn, submitBtn);
   form.append(contentField, imageField, townshipField, extensionField, actions);
 
-  formCard.append(formTitle, form);
+  formCard.append(formEyebrow, formTitle, formText, form);
   main.append(infoCard, formCard);
   shell.append(navbar, main);
   app.appendChild(shell);

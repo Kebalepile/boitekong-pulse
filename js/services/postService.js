@@ -9,7 +9,8 @@ import {
   validateExtension
 } from "../utils/validators.js";
 
-const ALLOWED_REACTIONS = ["like", "meh", "dislike"];
+const ALLOWED_REACTIONS = ["like", "dislike"];
+const REACTION_KEYS = ["like", "meh", "dislike"];
 
 function makeError(code, field, message) {
   const error = new Error(message);
@@ -248,7 +249,7 @@ export function setPostReaction({ postId, userId, reactionType }) {
 
   const alreadyActive = reactions[reactionType].includes(userId);
 
-  ALLOWED_REACTIONS.forEach((type) => {
+  REACTION_KEYS.forEach((type) => {
     reactions[type] = reactions[type].filter((id) => id !== userId);
   });
 
@@ -289,7 +290,7 @@ export function setCommentReaction({ postId, commentId, userId, reactionType }) 
   const reactions = createReactionRecord(comment.reactions);
   const alreadyActive = reactions[reactionType].includes(userId);
 
-  ALLOWED_REACTIONS.forEach((type) => {
+  REACTION_KEYS.forEach((type) => {
     reactions[type] = reactions[type].filter((id) => id !== userId);
   });
 
@@ -340,7 +341,6 @@ function collectCommentBranchIds(comments, rootCommentId) {
 function createReactionRecord(reactions = {}) {
   return {
     like: Array.isArray(reactions.like) ? [...reactions.like] : [],
-    meh: Array.isArray(reactions.meh) ? [...reactions.meh] : [],
     dislike: Array.isArray(reactions.dislike) ? [...reactions.dislike] : []
   };
 }
@@ -351,7 +351,6 @@ function getActiveReaction(entity, userId) {
   }
 
   if (entity.reactions.like?.includes(userId)) return "like";
-  if (entity.reactions.meh?.includes(userId)) return "meh";
   if (entity.reactions.dislike?.includes(userId)) return "dislike";
 
   return null;

@@ -73,6 +73,7 @@ export async function updateAuthenticatedUserProfile({
   username,
   township,
   extension,
+  avatarDataUrl,
   currentPassword,
   newPassword,
   confirmNewPassword
@@ -106,7 +107,8 @@ export async function updateAuthenticatedUserProfile({
     username,
     township,
     extension,
-    passwordHash
+    passwordHash,
+    avatarDataUrl
   });
 }
 

@@ -8,6 +8,7 @@ const PREFERRED_VOICE_NOTE_MIME_TYPES = [
 ];
 
 export const MAX_VOICE_NOTE_DURATION_MS = 60000;
+export const VOICE_NOTE_PLAYBACK_RATES = [1, 1.5, 2];
 
 export function isVoiceNoteRecordingSupported() {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
@@ -186,23 +187,46 @@ export function formatVoiceNoteDuration(durationMs = 0) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+export function getNextVoiceNotePlaybackRate(currentRate = 1) {
+  const currentIndex = VOICE_NOTE_PLAYBACK_RATES.indexOf(currentRate);
+  const nextIndex =
+    currentIndex >= 0 ? (currentIndex + 1) % VOICE_NOTE_PLAYBACK_RATES.length : 0;
+
+  return VOICE_NOTE_PLAYBACK_RATES[nextIndex];
+}
+
+export function formatVoiceNotePlaybackRate(rate = 1) {
+  return Number.isInteger(rate) ? `${rate}x` : `${rate.toFixed(1)}x`;
+}
+
 export function configureVoiceNoteAudio(audio, source = "", options = {}) {
   if (!audio) {
     return;
   }
 
   const { showNativeControls = false } = options;
+  const nextSource = typeof source === "string" ? source : "";
+  const currentSource = audio.getAttribute("src") || "";
 
   audio.controls = showNativeControls;
   audio.hidden = !showNativeControls;
   audio.preload = "metadata";
-  audio.src = source;
   audio.disableRemotePlayback = true;
   audio.controlsList = "nodownload noplaybackrate";
   audio.setAttribute("controlsList", "nodownload noplaybackrate");
   audio.oncontextmenu = (event) => {
     event.preventDefault();
   };
+
+  if (currentSource !== nextSource) {
+    if (nextSource) {
+      audio.setAttribute("src", nextSource);
+    } else {
+      audio.removeAttribute("src");
+    }
+
+    audio.load();
+  }
 }
 
 async function createVoiceNotePayload({ blob, startedAt, maxDurationMs }) {

@@ -8,21 +8,41 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { showToast } from "../components/toast.js";
+import { createBrandMark } from "../components/brandMark.js";
 
 export function renderRegister(app) {
   clearElement(app);
 
   const shell = createElement("section", { className: "auth-shell" });
   const card = createElement("div", { className: "auth-card" });
+  const intro = createElement("div", { className: "auth-intro" });
+  const introEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Join the neighborhood"
+  });
 
   const title = createElement("h1", {
     className: "auth-title",
-    text: "Create Account"
+    text: "Create your account"
   });
 
   const subtitle = createElement("p", {
     className: "auth-subtitle",
-    text: "Join Boitekong Plus"
+    text: "Boitekong Now is built for fast local updates, real replies, and voice notes from people nearby."
+  });
+  const featureList = createElement("div", { className: "auth-feature-list" });
+
+  [
+    "Township-first identity",
+    "Comments, replies, and reactions",
+    "Voice-note-ready conversations"
+  ].forEach((itemText) => {
+    featureList.appendChild(
+      createElement("span", {
+        className: "auth-feature-chip",
+        text: itemText
+      })
+    );
   });
 
   const form = createElement("form", {
@@ -76,7 +96,7 @@ export function renderRegister(app) {
   });
 
   const submitBtn = createElement("button", {
-    className: "primary-btn",
+    className: "primary-btn auth-submit-btn",
     text: "Register",
     type: "submit"
   });
@@ -103,7 +123,8 @@ export function renderRegister(app) {
   });
 
   footer.append(footerText, loginBtn);
-  card.append(title, subtitle, form, footer);
+  intro.append(createBrandMark(), introEyebrow, title, subtitle, featureList);
+  card.append(intro, form, footer);
   shell.appendChild(card);
   app.appendChild(shell);
 

@@ -3,6 +3,7 @@ import { createNavbar } from "../components/navbar.js";
 import { searchUsers, searchPosts } from "../services/searchService.js";
 import { createPostCard } from "../components/postCard.js";
 import { findUserById } from "../services/userService.js";
+import { createAvatarElement } from "../utils/avatar.js";
 
 export function renderSearch(app, currentUser, payload = null) {
   clearElement(app);
@@ -11,14 +12,24 @@ export function renderSearch(app, currentUser, payload = null) {
   const initialQuery = typeof payload?.query === "string" ? payload.query : "";
 
   const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser);
+  const navbar = createNavbar(currentUser, "search");
 
-  const main = createElement("main", { className: "feed-main" });
+  const main = createElement("main", { className: "feed-main search-main" });
 
-  const searchCard = createElement("section", { className: "feed-header-card" });
-  const title = createElement("h2", { text: "Search" });
+  const searchCard = createElement("section", {
+    className: "feed-header-card search-hero-card"
+  });
+  const eyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Explore"
+  });
+  const title = createElement("h2", {
+    className: "section-title",
+    text: "Search people and local posts"
+  });
   const description = createElement("p", {
-    text: "Search for users or posts across the local app data."
+    className: "section-copy",
+    text: "Find neighbors, trending updates, and township conversations without leaving the feed."
   });
 
   const modeRow = createElement("div", { className: "search-mode-row" });
@@ -41,7 +52,7 @@ export function renderSearch(app, currentUser, payload = null) {
   });
 
   const input = createElement("input", {
-    className: "form-input",
+    className: "form-input search-query-input",
     id: "search-query",
     type: "search",
     placeholder: "Search users, posts, township, extension...",
@@ -59,9 +70,9 @@ export function renderSearch(app, currentUser, payload = null) {
 
   modeRow.append(usersBtn, postsBtn);
   form.append(input, submitBtn);
-  searchCard.append(title, description, modeRow, form);
+  searchCard.append(eyebrow, title, description, modeRow, form);
 
-  const results = createElement("section", { className: "feed-list" });
+  const results = createElement("section", { className: "feed-list search-results-list" });
 
   let mode = initialMode;
 
@@ -150,12 +161,23 @@ function renderUserResults(results, users) {
 
   users.forEach((user) => {
     const card = createElement("article", { className: "profile-card search-user-card" });
+    const avatar = createAvatarElement(user, {
+      size: "md",
+      className: "search-user-avatar",
+      decorative: true
+    });
+    const body = createElement("div", { className: "search-user-copy" });
     const username = createElement("h3", { text: user.username });
     const location = createElement("p", {
       text: `${user.location.township} ${user.location.extension}`
     });
+    const hint = createElement("span", {
+      className: "search-user-hint",
+      text: "Community member"
+    });
 
-    card.append(username, location);
+    body.append(username, location, hint);
+    card.append(avatar, body);
     results.appendChild(card);
   });
 }

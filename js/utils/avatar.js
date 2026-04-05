@@ -1,0 +1,87 @@
+import { createElement } from "./dom.js";
+
+const AVATAR_PALETTE = [
+  { background: "linear-gradient(180deg, #dbeafe 0%, #bfdbfe 100%)", color: "#1d4ed8" },
+  { background: "linear-gradient(180deg, #fef3c7 0%, #fde68a 100%)", color: "#b45309" },
+  { background: "linear-gradient(180deg, #ede9fe 0%, #ddd6fe 100%)", color: "#6d28d9" },
+  { background: "linear-gradient(180deg, #dcfce7 0%, #bbf7d0 100%)", color: "#15803d" },
+  { background: "linear-gradient(180deg, #fee2e2 0%, #fecaca 100%)", color: "#b91c1c" }
+];
+
+export function createAvatarElement(user, { size = "md", className = "", decorative = false } = {}) {
+  const avatar = createElement("div", {
+    className: `avatar avatar-${size}${className ? ` ${className}` : ""}`
+  });
+
+  const avatarDataUrl = typeof user?.avatarDataUrl === "string" ? user.avatarDataUrl : "";
+  const avatarLabel = user?.username || "User avatar";
+
+  if (avatarDataUrl) {
+    const image = document.createElement("img");
+    image.className = "avatar-image";
+    image.src = avatarDataUrl;
+    image.alt = decorative ? "" : avatarLabel;
+    image.loading = "lazy";
+
+    if (decorative) {
+      image.setAttribute("aria-hidden", "true");
+    }
+
+    avatar.appendChild(image);
+    return avatar;
+  }
+
+  const palette = getAvatarPalette(user?.username || "");
+  avatar.classList.add("avatar-placeholder");
+  avatar.style.background = palette.background;
+  avatar.style.color = palette.color;
+  avatar.textContent = getAvatarInitials(user?.username || "BP");
+
+  if (decorative) {
+    avatar.setAttribute("aria-hidden", "true");
+  } else {
+    avatar.setAttribute("aria-label", avatarLabel);
+    avatar.setAttribute("role", "img");
+  }
+
+  return avatar;
+}
+
+export function getAvatarInitials(value = "") {
+  const words = String(value)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return "BP";
+  }
+
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${words[0][0] || ""}${words[1][0] || ""}`.toUpperCase();
+}
+
+export function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+    reader.onerror = () => reject(new Error("Could not read the selected image."));
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function getAvatarPalette(seed) {
+  const input = String(seed || "boitekong-plus");
+  let total = 0;
+
+  for (let index = 0; index < input.length; index += 1) {
+    total += input.charCodeAt(index);
+  }
+
+  return AVATAR_PALETTE[total % AVATAR_PALETTE.length];
+}

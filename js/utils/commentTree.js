@@ -1,4 +1,4 @@
-export function buildCommentTree(comments, sortOrder = "oldest") {
+export function buildCommentTree(comments, sortOrder = "newest") {
   const byId = new Map();
   const roots = [];
 

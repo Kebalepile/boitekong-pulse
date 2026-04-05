@@ -1,5 +1,7 @@
 const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
+export const MAX_AVATAR_FILE_BYTES = 1024 * 1024;
+const ALLOWED_AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const COMMON_WEAK_PASSWORDS = new Set([
   "123456",
@@ -373,4 +375,28 @@ export function validateImageUrl(value) {
     if (error.code) throw error;
     throw makeError("IMAGE_URL_INVALID", "image", "Image URL is invalid.");
   }
+}
+
+export function validateAvatarFile(file) {
+  if (!file) {
+    return null;
+  }
+
+  if (!ALLOWED_AVATAR_TYPES.has(file.type)) {
+    throw makeError(
+      "AVATAR_TYPE_INVALID",
+      "avatar",
+      "Profile photo must be a PNG, JPG, or WEBP image."
+    );
+  }
+
+  if (file.size > MAX_AVATAR_FILE_BYTES) {
+    throw makeError(
+      "AVATAR_TOO_LARGE",
+      "avatar",
+      "Profile photo must be smaller than 1 MB."
+    );
+  }
+
+  return file;
 }
