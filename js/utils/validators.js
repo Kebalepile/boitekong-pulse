@@ -1,5 +1,6 @@
 const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
+const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
 export const MAX_AVATAR_FILE_BYTES = 1024 * 1024;
 const ALLOWED_AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -63,6 +64,10 @@ export function normalizeExtension(value) {
     .replace(/^extension/i, "Ext")
     .replace(/^ext\.?/i, "Ext")
     .replace(/\s+/g, " ");
+}
+
+export function normalizePhoneNumber(value) {
+  return collapseWhitespace(value).replace(/\s*-\s*/g, "-");
 }
 
 export function normalizePassword(value) {
@@ -294,6 +299,24 @@ export function validatePostContent(value) {
       "POST_CONTENT_TOO_LONG",
       "content",
       "Post content must be 1000 characters or fewer."
+    );
+  }
+
+  return normalized;
+}
+
+export function validatePhoneNumber(value) {
+  const normalized = normalizePhoneNumber(value);
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (!PHONE_REGEX.test(normalized)) {
+    throw makeError(
+      "PHONE_NUMBER_INVALID",
+      "phoneNumber",
+      "Phone number must use digits and may include spaces, +, or hyphens."
     );
   }
 

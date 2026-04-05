@@ -37,7 +37,7 @@ export function navigate(routeName, payload = null) {
   }
 
   if (routeName === "profile") {
-    requireAuth(app, renderProfile);
+    requireAuth(app, renderProfile, payload);
     return;
   }
 

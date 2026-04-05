@@ -8,185 +8,145 @@ import {
 import { createNavbar } from "../components/navbar.js";
 import { navigate } from "../router.js";
 import { showToast } from "../components/toast.js";
+import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
 import { updateAuthenticatedUserProfile } from "../services/authService.js";
 import { createAvatarElement, readFileAsDataUrl } from "../utils/avatar.js";
 import { validateAvatarFile, MAX_AVATAR_FILE_BYTES } from "../utils/validators.js";
+import { formatCompactCount } from "../utils/numberFormat.js";
+import { getPostsByUserId } from "../services/postService.js";
+import {
+  getFollowerCount,
+  getFollowerUsers,
+  getFollowingUsers
+} from "../services/userService.js";
 
-export function renderProfile(app, currentUser) {
+export function renderProfile(app, currentUser, payload = null) {
   clearElement(app);
 
   const shell = createElement("section", { className: "feed-shell" });
   const navbar = createNavbar(currentUser, "profile");
   const main = createElement("main", { className: "profile-main profile-page-main" });
+  const activeSection = payload?.section === "followers" || payload?.section === "following"
+    ? payload.section
+    : "home";
+  const showEditForm = activeSection === "home" && payload?.editMode === true;
+  if (activeSection === "followers" || activeSection === "following") {
+    main.classList.add("profile-page-main-people");
+  }
+  const userPosts = getPostsByUserId(currentUser.id);
+  const followerCount = getFollowerCount(currentUser.id);
+  const followingCount = Array.isArray(currentUser.followingUserIds)
+    ? currentUser.followingUserIds.length
+    : 0;
   const avatarState = {
     dataUrl: currentUser.avatarDataUrl || ""
   };
 
   const summaryCard = createElement("section", {
-    className: "profile-card profile-hero-card"
+    className: "profile-card profile-channel-hero"
   });
-  const avatarPanel = createElement("div", { className: "profile-avatar-panel" });
+  const channelBanner = createElement("div", { className: "profile-channel-banner" });
+  const channelHero = createElement("div", { className: "profile-channel-hero-main" });
   const avatarPreviewShell = createElement("div", {
-    className: "profile-avatar-preview-shell"
+    className: "profile-avatar-preview-shell profile-channel-avatar-shell"
   });
   const avatarPreview = createElement("div", { className: "profile-avatar-preview" });
-  const avatarHint = createElement("p", {
-    className: "profile-avatar-hint",
-    text: "Your avatar appears on posts, comments, and replies."
-  });
-
-  avatarPreviewShell.appendChild(avatarPreview);
-  avatarPanel.append(avatarPreviewShell, avatarHint);
-
-  const heroCopy = createElement("div", { className: "profile-hero-copy" });
-  const heroEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Your identity"
-  });
+  const heroCopy = createElement("div", { className: "profile-channel-copy" });
   const summaryTitle = createElement("h2", {
-    className: "section-title",
-    text: "Profile"
+    className: "profile-channel-title",
+    text: currentUser.username
+  });
+  const handleText = createElement("p", {
+    className: "profile-channel-handle",
+    text: `@${currentUser.username}`
   });
   const summaryText = createElement("p", {
-    className: "section-copy",
-    text: "Keep your local presence recognizable so neighbors know who is speaking in the feed."
+    className: "profile-channel-description",
+    text: `${currentUser.location.township} ${currentUser.location.extension} local voice. Share updates, jump into threads, and keep the township loop alive.`
   });
-  const statsGrid = createElement("div", { className: "profile-summary-grid" });
-
-  statsGrid.append(
-    createInfoChip("Username", currentUser.username),
-    createInfoChip("Township", currentUser.location.township),
-    createInfoChip("Extension", currentUser.location.extension),
-    createInfoChip("Member since", formatJoinDate(currentUser.createdAt))
-  );
-
-  heroCopy.append(heroEyebrow, summaryTitle, summaryText, statsGrid);
-  summaryCard.append(avatarPanel, heroCopy);
-
-  const formCard = createElement("section", {
-    className: "profile-card profile-form-card"
+  const metaRow = createElement("p", {
+    className: "profile-channel-meta",
+    text: `${formatCompactCount(userPosts.length)} ${userPosts.length === 1 ? "post" : "posts"} | ${formatCompactCount(followerCount)} ${followerCount === 1 ? "follower" : "followers"} | ${formatCompactCount(followingCount)} following | Joined ${formatJoinDate(currentUser.createdAt)}`
   });
-  const formHeader = createElement("div", { className: "section-header" });
-  const formEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Edit profile"
-  });
-  const formTitle = createElement("h2", {
-    className: "section-title",
-    text: "Update your account"
-  });
-  const formText = createElement("p", {
-    className: "section-copy",
-    text: "Profile photo is optional. If you upload one, keep it under 1 MB."
-  });
-
-  formHeader.append(formEyebrow, formTitle, formText);
-
-  const form = createElement("form", {
-    className: "auth-form profile-form",
-    id: "profile-form"
-  });
-
-  const avatarUploadField = createAvatarUploadField({
-    currentUser,
-    avatarState,
-    avatarPreview,
-    form
-  });
-
-  const usernameField = createField({
-    labelText: "Username",
-    inputId: "profile-username",
-    type: "text",
-    placeholder: "Enter username",
-    value: currentUser.username,
-    autocomplete: "username",
-    helperText: "3-30 characters. Can include emoji. Maximum 3 spaces."
-  });
-
-  const townshipField = createField({
-    labelText: "Township",
-    inputId: "profile-township",
-    type: "text",
-    placeholder: "e.g. Boitekong",
-    value: currentUser.location.township,
-    autocomplete: "address-level2",
-    helperText: "Township is text only."
-  });
-
-  const extensionField = createField({
-    labelText: "Extension",
-    inputId: "profile-extension",
-    type: "text",
-    placeholder: "e.g. Ext 2",
-    value: currentUser.location.extension,
-    autocomplete: "off",
-    helperText: 'Example: "Ext 2"'
-  });
-
-  const currentPasswordField = createField({
-    labelText: "Current Password",
-    inputId: "profile-current-password",
-    type: "password",
-    value: "",
-    placeholder: "Required only when changing password",
-    autocomplete: "current-password",
-    required: false,
-    helperText: "Enter your current password before setting a new one."
-  });
-
-  const newPasswordField = createField({
-    labelText: "New Password",
-    inputId: "profile-password",
-    type: "password",
-    value: "",
-    placeholder: "Leave blank to keep current password",
-    autocomplete: "new-password",
-    required: false,
-    helperText: "Optional. If used, must meet password rules."
-  });
-
-  const confirmNewPasswordField = createField({
-    labelText: "Confirm New Password",
-    inputId: "profile-confirm-password",
-    type: "password",
-    value: "",
-    placeholder: "Confirm new password",
-    autocomplete: "new-password",
-    required: false,
-    helperText: "Only required when setting a new password."
-  });
-
-  const actions = createElement("div", { className: "form-actions" });
-  const backBtn = createElement("button", {
-    className: "secondary-btn",
-    text: "Back to Feed",
+  const actionRow = createElement("div", { className: "profile-channel-actions" });
+  const editProfileBtn = createElement("button", {
+    className: "secondary-btn profile-channel-btn",
+    text: "Edit profile",
     type: "button"
   });
-  const submitBtn = createElement("button", {
-    className: "primary-btn",
-    text: "Save Profile",
-    type: "submit"
+  const addPostBtn = createElement("button", {
+    className: "secondary-btn profile-channel-btn",
+    text: "Add post",
+    type: "button"
   });
+  editProfileBtn.addEventListener("click", () => {
+    navigate("profile", { editMode: true });
+  });
+  addPostBtn.addEventListener("click", () => navigate("create-post"));
+  actionRow.append(editProfileBtn, addPostBtn);
 
-  backBtn.addEventListener("click", () => navigate("feed"));
-  actions.append(backBtn, submitBtn);
-
-  form.append(
-    avatarUploadField,
-    usernameField,
-    townshipField,
-    extensionField,
-    currentPasswordField,
-    newPasswordField,
-    confirmNewPasswordField,
-    actions
+  const tabs = createElement("div", { className: "profile-channel-tabs" });
+  tabs.append(
+    createChannelTab("Home", {
+      active: activeSection === "home",
+      onClick: () => navigate("feed")
+    }),
+    createChannelTab("Posts", {
+      onClick: () =>
+        navigate("search", {
+          mode: "posts",
+          authorUserId: currentUser.id,
+          authorUsername: currentUser.username
+        })
+    }),
+    createChannelTab("Followers", {
+      active: activeSection === "followers",
+      onClick: () =>
+        navigate("profile", {
+          section: "followers"
+        })
+    }),
+    createChannelTab("Following", {
+      active: activeSection === "following",
+      onClick: () =>
+        navigate("profile", {
+          section: "following"
+        })
+    })
   );
 
-  formCard.append(formHeader, form);
-  main.append(summaryCard, formCard);
+  avatarPreviewShell.appendChild(avatarPreview);
+  heroCopy.append(summaryTitle, handleText, metaRow, summaryText, actionRow);
+  channelHero.append(avatarPreviewShell, heroCopy);
+  summaryCard.append(channelBanner, channelHero, tabs);
+  let profileEditor = null;
+
+  if (activeSection === "followers" || activeSection === "following") {
+    main.append(
+      summaryCard,
+      createPeoplePanel({
+        currentUser,
+        section: activeSection
+      })
+    );
+  } else if (showEditForm) {
+    profileEditor = createProfileEditForm({
+      currentUser,
+      avatarState,
+      avatarPreview
+    });
+    main.append(summaryCard, profileEditor.formCard);
+  } else {
+    main.append(summaryCard);
+  }
   shell.append(navbar, main);
   app.appendChild(shell);
+
+  renderAvatarPreview(avatarPreview, currentUser);
+
+  if (!profileEditor) {
+    return;
+  }
 
   const usernameInput = document.getElementById("profile-username");
   usernameInput?.addEventListener("input", () => {
@@ -196,13 +156,12 @@ export function renderProfile(app, currentUser) {
     });
   });
 
-  renderAvatarPreview(avatarPreview, currentUser);
-
-  form.addEventListener("submit", async (event) => {
+  profileEditor.form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    clearFormErrors(form);
+    clearFormErrors(profileEditor.form);
 
     const username = document.getElementById("profile-username").value;
+    const phoneNumber = document.getElementById("profile-phone")?.value || "";
     const township = document.getElementById("profile-township").value;
     const extension = document.getElementById("profile-extension").value;
     const currentPassword = document.getElementById("profile-current-password").value;
@@ -213,6 +172,7 @@ export function renderProfile(app, currentUser) {
       await updateAuthenticatedUserProfile({
         currentUser,
         username,
+        phoneNumber,
         township,
         extension,
         avatarDataUrl: avatarState.dataUrl,
@@ -224,7 +184,9 @@ export function renderProfile(app, currentUser) {
       showToast("Profile updated successfully.", "success");
       navigate("profile");
     } catch (error) {
-      handleProfileError(error);
+      handleProfileError(error, {
+        switchToTab: profileEditor.switchToTab
+      });
     }
   });
 }
@@ -330,6 +292,347 @@ function createInfoChip(label, value) {
   return chip;
 }
 
+function createChannelTab(label, options = {}) {
+  const button = createElement("button", {
+    className: `profile-channel-tab${options.active ? " profile-channel-tab-active" : ""}`,
+    text: label,
+    type: "button"
+  });
+
+  if (typeof options.onClick === "function") {
+    button.addEventListener("click", options.onClick);
+  }
+
+  return button;
+}
+
+function createPeoplePanel({ currentUser, section }) {
+  const panel = createElement("section", {
+    className: "profile-card profile-people-panel"
+  });
+  const title = createElement("h3", {
+    className: "profile-people-title",
+    text: section === "followers" ? "Followers" : "Following"
+  });
+  const users =
+    section === "followers"
+      ? getFollowerUsers(currentUser.id)
+      : getFollowingUsers(currentUser.id);
+  const hint = createElement("p", {
+    className: "profile-people-hint",
+    text:
+      users.length > 0
+        ? "Tap a person to open their profile."
+        : `No ${section} yet.`
+  });
+  const scroller = createElement("div", {
+    className: "profile-people-scroller"
+  });
+
+  if (users.length === 0) {
+    panel.append(
+      title,
+      hint,
+      createElement("p", {
+        className: "profile-people-empty",
+        text:
+          section === "followers"
+            ? `${currentUser.username} has no followers yet.`
+            : `${currentUser.username} is not following anyone yet.`
+      })
+    );
+    return panel;
+  }
+
+  users.forEach((user) => {
+    const personBtn = createElement("button", {
+      className: "profile-people-card",
+      type: "button",
+      attributes: {
+        "aria-label": `Open ${user.username}'s profile`,
+        title: user.username
+      }
+    });
+    const avatar = createAvatarElement(user, {
+      size: "md",
+      className: "profile-people-avatar",
+      decorative: true
+    });
+    const name = createElement("span", {
+      className: "profile-people-name",
+      text: shortenUsername(user.username)
+    });
+
+    personBtn.append(avatar, name);
+    personBtn.addEventListener("click", () => {
+      showUserPreviewSheet({
+        userId: user.id,
+        currentUserId: currentUser.id
+      });
+    });
+    scroller.appendChild(personBtn);
+  });
+
+  panel.append(title, hint, scroller);
+  return panel;
+}
+
+function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
+  const formCard = createElement("section", {
+    className: "profile-card profile-form-card profile-edit-card"
+  });
+  const formHeader = createElement("div", {
+    className: "section-header profile-edit-header"
+  });
+  const formEyebrow = createElement("p", {
+    className: "section-eyebrow",
+    text: "Edit profile"
+  });
+  const formTitle = createElement("h2", {
+    className: "section-title",
+    text: "Update your account"
+  });
+  const formText = createElement("p", {
+    className: "section-copy profile-edit-copy",
+    text: "Switch between tabs to update personal info, login details, and your location without one long form."
+  });
+  const tabList = createElement("div", {
+    className: "profile-edit-tabs",
+    attributes: {
+      role: "tablist",
+      "aria-label": "Edit profile sections"
+    }
+  });
+  const form = createElement("form", {
+    className: "auth-form profile-form profile-edit-form",
+    id: "profile-form"
+  });
+
+  formHeader.append(formEyebrow, formTitle, formText);
+
+  const personalPanel = createElement("section", {
+    className: "profile-edit-panel profile-edit-panel-active",
+    attributes: {
+      role: "tabpanel",
+      id: "profile-tab-panel-personal"
+    }
+  });
+  const personalIntro = createElement("div", { className: "profile-edit-panel-copy" });
+  personalIntro.append(
+    createElement("h3", {
+      className: "profile-edit-panel-title",
+      text: "Personal info"
+    }),
+    createElement("p", {
+      className: "profile-edit-panel-text",
+      text: "Keep your public details current so people recognize you across posts, comments, and replies."
+    })
+  );
+  const avatarUploadField = createAvatarUploadField({
+    currentUser,
+    avatarState,
+    avatarPreview,
+    form
+  });
+  const usernameField = createField({
+    labelText: "Username",
+    inputId: "profile-username",
+    type: "text",
+    placeholder: "Enter username",
+    value: currentUser.username,
+    autocomplete: "username",
+    helperText: "3-30 characters. Can include emoji. Maximum 3 spaces."
+  });
+  const phoneField = createField({
+    labelText: "Phone Number",
+    inputId: "profile-phone",
+    type: "tel",
+    placeholder: "e.g. 071 234 5678",
+    value: currentUser.phoneNumber || "",
+    autocomplete: "tel",
+    required: false,
+    helperText: "Optional. Use numbers, spaces, +, or hyphens.",
+    attributes: {
+      inputmode: "tel"
+    }
+  });
+  personalPanel.append(personalIntro, usernameField, phoneField, avatarUploadField);
+
+  const credentialsPanel = createElement("section", {
+    className: "profile-edit-panel",
+    attributes: {
+      role: "tabpanel",
+      id: "profile-tab-panel-credentials",
+      hidden: "hidden"
+    }
+  });
+  const credentialsIntro = createElement("div", {
+    className: "profile-edit-panel-copy"
+  });
+  credentialsIntro.append(
+    createElement("h3", {
+      className: "profile-edit-panel-title",
+      text: "Login credentials"
+    }),
+    createElement("p", {
+      className: "profile-edit-panel-text",
+      text: "Only fill in these fields when you want to change your password."
+    })
+  );
+  const currentPasswordField = createField({
+    labelText: "Current Password",
+    inputId: "profile-current-password",
+    type: "password",
+    value: "",
+    placeholder: "Required only when changing password",
+    autocomplete: "current-password",
+    required: false,
+    helperText: "Enter your current password before setting a new one."
+  });
+  const newPasswordField = createField({
+    labelText: "New Password",
+    inputId: "profile-password",
+    type: "password",
+    value: "",
+    placeholder: "Leave blank to keep current password",
+    autocomplete: "new-password",
+    required: false,
+    helperText: "Optional. If used, must meet password rules."
+  });
+  const confirmNewPasswordField = createField({
+    labelText: "Confirm New Password",
+    inputId: "profile-confirm-password",
+    type: "password",
+    value: "",
+    placeholder: "Confirm new password",
+    autocomplete: "new-password",
+    required: false,
+    helperText: "Only required when setting a new password."
+  });
+  credentialsPanel.append(
+    credentialsIntro,
+    currentPasswordField,
+    newPasswordField,
+    confirmNewPasswordField
+  );
+
+  const locationPanel = createElement("section", {
+    className: "profile-edit-panel",
+    attributes: {
+      role: "tabpanel",
+      id: "profile-tab-panel-location",
+      hidden: "hidden"
+    }
+  });
+  const locationIntro = createElement("div", { className: "profile-edit-panel-copy" });
+  locationIntro.append(
+    createElement("h3", {
+      className: "profile-edit-panel-title",
+      text: "Location"
+    }),
+    createElement("p", {
+      className: "profile-edit-panel-text",
+      text: "Set the township and extension you want attached to your posts and community presence."
+    })
+  );
+  const townshipField = createField({
+    labelText: "Township",
+    inputId: "profile-township",
+    type: "text",
+    placeholder: "e.g. Boitekong",
+    value: currentUser.location.township,
+    autocomplete: "address-level2",
+    helperText: "Township is text only."
+  });
+  const extensionField = createField({
+    labelText: "Extension",
+    inputId: "profile-extension",
+    type: "text",
+    placeholder: "e.g. Ext 2",
+    value: currentUser.location.extension,
+    autocomplete: "off",
+    helperText: 'Example: "Ext 2"'
+  });
+  locationPanel.append(locationIntro, townshipField, extensionField);
+
+  const tabs = [
+    {
+      key: "personal",
+      label: "Personal info",
+      button: createProfileEditTab("Personal info", {
+        key: "personal",
+        active: true,
+        controlsId: "profile-tab-panel-personal"
+      }),
+      panel: personalPanel
+    },
+    {
+      key: "location",
+      label: "Location",
+      button: createProfileEditTab("Location", {
+        key: "location",
+        controlsId: "profile-tab-panel-location"
+      }),
+      panel: locationPanel
+    },
+    {
+      key: "credentials",
+      label: "Login credentials",
+      button: createProfileEditTab("Login credentials", {
+        key: "credentials",
+        controlsId: "profile-tab-panel-credentials"
+      }),
+      panel: credentialsPanel
+    }
+  ];
+
+  const switchToTab = (tabKey) => {
+    tabs.forEach((tab) => {
+      const isActive = tab.key === tabKey;
+      tab.button.classList.toggle("profile-edit-tab-active", isActive);
+      tab.button.setAttribute("aria-selected", isActive ? "true" : "false");
+      tab.button.tabIndex = isActive ? 0 : -1;
+      tab.panel.classList.toggle("profile-edit-panel-active", isActive);
+      if (isActive) {
+        tab.panel.removeAttribute("hidden");
+      } else {
+        tab.panel.setAttribute("hidden", "hidden");
+      }
+    });
+  };
+
+  tabs.forEach((tab) => {
+    tab.button.addEventListener("click", () => switchToTab(tab.key));
+    tabList.appendChild(tab.button);
+  });
+
+  const actions = createElement("div", {
+    className: "form-actions profile-edit-actions"
+  });
+  const cancelBtn = createElement("button", {
+    className: "secondary-btn",
+    text: "Cancel",
+    type: "button"
+  });
+    const submitBtn = createElement("button", {
+      className: "primary-btn",
+      text: "Save",
+      type: "submit"
+    });
+
+  cancelBtn.addEventListener("click", () => navigate("profile"));
+  actions.append(cancelBtn, submitBtn);
+
+  form.append(tabList, personalPanel, credentialsPanel, locationPanel, actions);
+  formCard.append(formHeader, form);
+
+  return {
+    formCard,
+    form,
+    switchToTab
+  };
+}
+
 function createField({
   labelText,
   inputId,
@@ -338,7 +641,8 @@ function createField({
   value,
   autocomplete,
   helperText = "",
-  required = true
+  required = true,
+  attributes = {}
 }) {
   const wrapper = createElement("div", { className: "field-group" });
   const label = createElement("label", {
@@ -351,7 +655,8 @@ function createField({
     type,
     placeholder,
     required,
-    autocomplete
+    autocomplete,
+    attributes
   });
 
   input.value = value;
@@ -368,6 +673,20 @@ function createField({
   return wrapper;
 }
 
+function createProfileEditTab(label, options = {}) {
+  return createElement("button", {
+    className: `profile-edit-tab${options.active ? " profile-edit-tab-active" : ""}`,
+    text: label,
+    type: "button",
+    attributes: {
+      role: "tab",
+      "aria-selected": options.active ? "true" : "false",
+      "aria-controls": options.controlsId || "",
+      "data-tab-key": options.key || ""
+    }
+  });
+}
+
 function formatJoinDate(isoDate) {
   const date = new Date(isoDate);
 
@@ -380,9 +699,20 @@ function formatJoinDate(isoDate) {
   }).format(date);
 }
 
-function handleProfileError(error) {
+function shortenUsername(value = "") {
+  const username = String(value || "").trim();
+
+  if (username.length <= 12) {
+    return username;
+  }
+
+  return `${username.slice(0, 9)}...`;
+}
+
+function handleProfileError(error, options = {}) {
   const fieldMap = {
     username: "profile-username",
+    phoneNumber: "profile-phone",
     township: "profile-township",
     extension: "profile-extension",
     avatar: "profile-avatar",
@@ -390,8 +720,21 @@ function handleProfileError(error) {
     password: "profile-password",
     confirmPassword: "profile-confirm-password"
   };
+  const tabMap = {
+    username: "personal",
+    phoneNumber: "personal",
+    avatar: "personal",
+    currentPassword: "credentials",
+    password: "credentials",
+    confirmPassword: "credentials",
+    township: "location",
+    extension: "location"
+  };
 
   if (error?.field && fieldMap[error.field]) {
+    if (typeof options.switchToTab === "function" && tabMap[error.field]) {
+      options.switchToTab(tabMap[error.field]);
+    }
     setFieldError(fieldMap[error.field], error.message);
     if (error.code === "USERNAME_EXISTS" || error.code === "CURRENT_PASSWORD_INVALID") {
       showToast(error.message, "error");

@@ -341,6 +341,7 @@ function collectCommentBranchIds(comments, rootCommentId) {
 function createReactionRecord(reactions = {}) {
   return {
     like: Array.isArray(reactions.like) ? [...reactions.like] : [],
+    meh: Array.isArray(reactions.meh) ? [...reactions.meh] : [],
     dislike: Array.isArray(reactions.dislike) ? [...reactions.dislike] : []
   };
 }

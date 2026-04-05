@@ -11,10 +11,12 @@ import {
   attachVoiceNoteScrubber
 } from "../utils/voiceNoteVisualizer.js";
 import { createAvatarElement } from "../utils/avatar.js";
+import { formatCompactCount } from "../utils/numberFormat.js";
 
 export function createCommentCard(comment, author, options = {}) {
   const {
     isReply = false,
+    isPostAuthor = false,
     replyingTo = "",
     repliesCount = 0,
     repliesExpanded = false,
@@ -29,18 +31,25 @@ export function createCommentCard(comment, author, options = {}) {
     className: `comment-card${isReply ? " comment-card-reply" : ""}`
   });
 
-  const header = createElement("div", { className: "comment-card-header" });
-  const authorGroup = createElement("div", { className: "comment-author-group" });
+  const main = createElement("div", { className: "comment-card-main" });
   const authorAvatarElement = createAvatarElement(author, {
     size: "sm",
     className: "comment-avatar",
     decorative: true
   });
+  const body = createElement("div", { className: "comment-card-body" });
+  const metaRow = createElement("div", { className: "comment-meta-row" });
   const authorText = createElement("div", { className: "comment-author-text" });
   const authorName = createElement("span", {
     className: "comment-author",
-    text: author?.username || "Unknown User"
+    text: `@${author?.username || "Unknown User"}`
   });
+  const authorBadge = isPostAuthor
+    ? createElement("span", {
+        className: "comment-author-badge",
+        text: "Author"
+      })
+    : null;
   const meta = createElement("span", {
     className: "comment-meta",
     text: formatCommentMeta(comment)
@@ -65,9 +74,14 @@ export function createCommentCard(comment, author, options = {}) {
         })
       : authorName;
 
-  authorText.append(authorNameNode, meta);
-  authorGroup.append(authorAvatar, authorText);
-  header.append(authorGroup);
+  authorText.append(authorNameNode);
+
+  if (authorBadge) {
+    authorText.appendChild(authorBadge);
+  }
+
+  authorText.appendChild(meta);
+  metaRow.appendChild(authorText);
 
   if (typeof onOpenMenu === "function") {
     const menuBtn = createIconActionButton({
@@ -77,13 +91,13 @@ export function createCommentCard(comment, author, options = {}) {
     });
 
     menuBtn.addEventListener("click", onOpenMenu);
-    header.appendChild(menuBtn);
+    main.appendChild(menuBtn);
   }
 
-  card.appendChild(header);
+  body.appendChild(metaRow);
 
   if (isReply && replyingTo) {
-    card.appendChild(
+    body.appendChild(
       createElement("p", {
         className: "comment-reply-context",
         text: `Replying to @${replyingTo}`
@@ -97,7 +111,7 @@ export function createCommentCard(comment, author, options = {}) {
       text: comment.content
     });
 
-    card.appendChild(content);
+    body.appendChild(content);
   }
 
   let engagementRow = null;
@@ -117,10 +131,14 @@ export function createCommentCard(comment, author, options = {}) {
   }
 
   if (typeof onReply === "function") {
-    const replyBtn = createIconActionButton({
-      className: "comment-icon-btn comment-reply-btn",
-      iconName: "reply",
-      label: "Reply to comment"
+    const replyBtn = createElement("button", {
+      className: "comment-reply-text-btn",
+      type: "button",
+      text: "Reply",
+      attributes: {
+        "aria-label": "Reply to comment",
+        title: "Reply to comment"
+      }
     });
 
     replyBtn.addEventListener("click", onReply);
@@ -128,39 +146,48 @@ export function createCommentCard(comment, author, options = {}) {
   }
 
   if (engagementRow) {
-    card.appendChild(engagementRow);
+    body.appendChild(engagementRow);
   }
 
   if (repliesCount > 0 && typeof onToggleReplies === "function") {
     const actions = createElement("div", { className: "comment-card-actions" });
     const repliesBtn = createElement("button", {
       className: "comment-replies-toggle-link",
-      type: "button",
-      text: getRepliesToggleLabel(repliesExpanded, repliesCount)
+      type: "button"
     });
     let isExpanded = repliesExpanded;
+    const repliesText = createElement("span", {
+      className: "comment-replies-toggle-text",
+      text: getRepliesToggleLabel(repliesCount)
+    });
+    const repliesIcon = createCommentActionIcon("chevron");
+    repliesIcon.classList.add("comment-replies-toggle-icon");
+
+    repliesBtn.append(repliesText, repliesIcon);
+    repliesBtn.classList.toggle("comment-replies-toggle-link-expanded", repliesExpanded);
 
     repliesBtn.addEventListener("click", () => {
       onToggleReplies();
       isExpanded = !isExpanded;
-      repliesBtn.textContent = getRepliesToggleLabel(isExpanded, repliesCount);
+      repliesBtn.classList.toggle("comment-replies-toggle-link-expanded", isExpanded);
     });
 
     actions.appendChild(repliesBtn);
-    card.appendChild(actions);
+    body.appendChild(actions);
   }
 
   if (comment.voiceNote?.dataUrl) {
-    card.appendChild(createVoiceNotePlayer(comment.voiceNote));
+    body.appendChild(createVoiceNotePlayer(comment.voiceNote));
   }
+
+  main.prepend(authorAvatar, body);
+  card.appendChild(main);
 
   return card;
 }
 
-function getRepliesToggleLabel(isExpanded, repliesCount) {
-  return isExpanded
-    ? "Hide replies"
-    : `(${repliesCount}) ${repliesCount === 1 ? "reply" : "replies"}`;
+function getRepliesToggleLabel(repliesCount) {
+  return `${formatCompactCount(repliesCount)} ${repliesCount === 1 ? "reply" : "replies"}`;
 }
 
 function createProfileTriggerButton({ className, label, onClick, child }) {
@@ -210,6 +237,8 @@ function getCommentActionIconPath(name) {
   const iconPaths = {
     reply:
       "M20 4H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3v4l5.2-4H20a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 11h-8.5L9 16.9V15H4V6h16v9Z",
+    chevron:
+      "M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41Z",
     more:
       "M12 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 7Zm0 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 14Zm0 7a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 12 21Z"
   };
@@ -394,19 +423,39 @@ function createVoiceNotePlayer(voiceNote) {
 }
 
 function formatCommentMeta(comment) {
-  const baseText = formatTimestamp(comment.createdAt);
-  return comment.updatedAt ? `${baseText} | Edited` : baseText;
+  const baseText = formatRelativeTimestamp(comment.createdAt);
+  return comment.updatedAt ? `${baseText} (edited)` : baseText;
 }
 
-function formatTimestamp(isoDate) {
+function formatRelativeTimestamp(isoDate) {
   const date = new Date(isoDate);
 
   if (Number.isNaN(date.getTime())) {
     return "Unknown time";
   }
 
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.max(Math.floor(diffMs / 60000), 0);
+  const diffHours = Math.max(Math.floor(diffMs / 3600000), 0);
+  const diffDays = Math.max(Math.floor(diffMs / 86400000), 0);
+
+  if (diffMinutes < 1) {
+    return "just now";
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} ${diffMinutes === 1 ? "minute" : "minutes"} ago`;
+  }
+
+  if (diffHours < 24) {
+    return `${diffHours} ${diffHours === 1 ? "hour" : "hours"} ago`;
+  }
+
+  if (diffDays < 7) {
+    return `${diffDays} ${diffDays === 1 ? "day" : "days"} ago`;
+  }
+
   return new Intl.DateTimeFormat("en-ZA", {
-    dateStyle: "medium",
-    timeStyle: "short"
+    dateStyle: "medium"
   }).format(date);
 }

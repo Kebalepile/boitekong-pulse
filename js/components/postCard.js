@@ -35,6 +35,7 @@ import {
 } from "../utils/voiceNoteVisualizer.js";
 import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
 import { createAvatarElement } from "../utils/avatar.js";
+import { formatCompactCount } from "../utils/numberFormat.js";
 
 const POST_PREVIEW_LENGTH = 300;
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
@@ -47,7 +48,9 @@ const commentUiState = {
   openReplyLists: new Set(),
   openEditForms: new Set(),
   sortOrders: new Map(),
-  panelEntries: new Map()
+  panelEntries: new Map(),
+  activeSheetPostId: null,
+  activeSheetContext: null
 };
 
 export function createPostCard(post, author, currentUserId, onReactionChange) {
@@ -94,9 +97,6 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
     className: "post-meta",
     text: formatPostMeta(post)
   });
-  const contextRow = createElement("div", { className: "post-context-row" });
-  const storedComments = Array.isArray(post.comments) ? post.comments : [];
-  const voiceNoteCount = storedComments.filter((comment) => comment.voiceNote?.dataUrl).length;
 
   const openAuthorProfile =
     author?.id
@@ -132,32 +132,9 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
 
   header.appendChild(createPostMenuButton(post, author, currentUserId, onReactionChange));
 
-  if (storedComments.length > 0) {
-    contextRow.appendChild(
-      createPostContextPill(
-        "post-context-pill-activity",
-        `${storedComments.length} ${storedComments.length === 1 ? "comment" : "comments"}`
-      )
-    );
-  }
-
-  if (voiceNoteCount > 0) {
-    contextRow.appendChild(
-      createPostContextPill(
-        "post-context-pill-voice",
-        `${voiceNoteCount} voice ${voiceNoteCount === 1 ? "note" : "notes"}`
-      )
-    );
-  }
-
   const content = createPostContent(post);
 
   card.append(header);
-
-  if (contextRow.childElementCount > 0) {
-    card.appendChild(contextRow);
-  }
-
   card.appendChild(content);
 
   if (post.image) {
@@ -344,13 +321,6 @@ function createPostImage(imageUrl) {
   return imageWrapper;
 }
 
-function createPostContextPill(className, text) {
-  return createElement("span", {
-    className: `post-context-pill ${className}`,
-    text
-  });
-}
-
 function createReactionBar({
   reactions,
   activeReaction,
@@ -386,7 +356,7 @@ function createReactionBar({
         button.appendChild(
           createElement("span", {
             className: "reaction-btn-count",
-            text: String(count)
+            text: formatCompactCount(count)
           })
         );
       }
@@ -413,6 +383,7 @@ function createReactionIcon(name) {
   svg.classList.add("reaction-icon");
 
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.classList.add("reaction-icon-path");
   path.setAttribute("fill", "currentColor");
   path.setAttribute("d", getReactionIconPath(name));
   svg.appendChild(path);
@@ -446,57 +417,94 @@ function getReactionIconPath(name) {
   return iconPaths[name] || iconPaths.like;
 }
 
+function createCommentsSortIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("comments-sort-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute(
+    "d",
+    "M4 7h6m4 0h6M10 7a2 2 0 1 0 0 .001M4 12h12m4 0h0M16 12a2 2 0 1 0 0 .001M4 17h3m5 0h8M9 17a2 2 0 1 0 0 .001"
+  );
+  svg.appendChild(path);
+
+  return svg;
+}
+
 function createCommentsSection(post, currentUserId, onPostChange) {
-  const section = createElement("section", { className: "comments-section" });
+  const section = createElement("section", {
+    className: "comments-section comments-section-launcher"
+  });
   const comments = getCommentsForPost(post.id);
-  const sortOrder = commentUiState.sortOrders.get(post.id) || "newest";
-  const commentTree = buildCommentTree(comments, sortOrder);
-  const panelIsOpen = commentUiState.openPanels.has(post.id);
-  const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
-
-  const header = createElement("div", { className: "comments-header" });
-
   const toggleBtn = createElement("button", {
-    className: `comment-toggle-btn${panelIsOpen ? " comment-toggle-btn-active" : ""}`,
+    className: "comment-toggle-btn",
     type: "button",
-    text: getCommentsToggleLabel(panelIsOpen, comments.length)
+    text: getCommentsToggleLabel(true, comments.length)
   });
 
+  toggleBtn.addEventListener("click", () => {
+    openCommentsSheet({
+      postId: post.id,
+      currentUserId,
+      onPostChange
+    });
+  });
+
+  section.appendChild(toggleBtn);
+  return section;
+}
+
+function createCommentsSheetContent(post, currentUserId, onPostChange) {
+  const section = createElement("section", {
+    className: "comments-section comments-section-sheet"
+  });
+  const comments = getCommentsForPost(post.id);
+  const currentUser = findUserById(currentUserId);
+  const sortOrder = commentUiState.sortOrders.get(post.id) || "newest";
+  const commentTree = buildCommentTree(comments, sortOrder);
+  const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
+  const header = createElement("div", { className: "comments-header" });
+  const title = createElement("h3", {
+    className: "comments-sheet-title",
+    text: getCommentsToggleLabel(true, comments.length)
+  });
   const controls = createElement("div", { className: "comments-header-controls" });
-  controls.appendChild(toggleBtn);
+  const handleCommentsChange = (options = {}) => {
+    if (typeof onPostChange === "function") {
+      onPostChange(options);
+    }
 
-  if (comments.length > 0) {
-    const sortLabel = createElement("label", {
-      className: "comments-sort-label",
-      text: "Sort"
-    });
-    const sortSelect = createElement("select", {
-      className: "form-input comments-sort-select",
-      attributes: {
-        "aria-label": `Sort comments for post ${post.id}`
-      }
-    });
+    if (commentUiState.activeSheetPostId === post.id) {
+      window.requestAnimationFrame(() => {
+        openCommentsSheet({
+          postId: post.id,
+          currentUserId,
+          onPostChange,
+          focusCommentId: options?.focusCommentId || null
+        });
+      });
+    }
+  };
+  const sortLabel =
+    comments.length > 0
+      ? createCommentsSortControl({
+          postId: post.id,
+          sortOrder,
+          onSortChange: (nextSortOrder) => {
+            commentUiState.sortOrders.set(post.id, nextSortOrder);
+            handleCommentsChange();
+          }
+        })
+      : null;
 
-    [
-      { value: "newest", label: "Newest first" },
-      { value: "oldest", label: "Oldest first" }
-    ].forEach(({ value, label }) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      option.selected = sortOrder === value;
-      sortSelect.appendChild(option);
-    });
-
-    sortSelect.addEventListener("change", () => {
-      commentUiState.sortOrders.set(post.id, sortSelect.value);
-
-      if (typeof onPostChange === "function") {
-        onPostChange();
-      }
-    });
-
-    sortLabel.appendChild(sortSelect);
+  if (sortLabel) {
     controls.appendChild(sortLabel);
   }
 
@@ -508,13 +516,17 @@ function createCommentsSection(post, currentUserId, onPostChange) {
     }
   });
   panel.classList.toggle("comments-panel-empty", commentTree.length === 0);
-  setToggleDisplay(panel, panelIsOpen);
 
   const composerActions = createElement("div", { className: "comments-composer-actions" });
+  const composerAvatar = createAvatarElement(currentUser, {
+    size: "sm",
+    className: "comments-composer-avatar",
+    decorative: true
+  });
   const composerToggleBtn = createElement("button", {
-    className: "secondary-btn comments-composer-btn",
+    className: "comments-composer-btn",
     type: "button",
-    text: commentFormIsOpen ? "Hide comment box" : "Add comment"
+    text: "Add a comment..."
   });
 
   let topLevelForm;
@@ -530,7 +542,6 @@ function createCommentsSection(post, currentUserId, onPostChange) {
       commentUiState.openCommentForms.delete(post.id);
       resetCommentForm(topLevelForm);
       setToggleDisplay(topLevelForm, false);
-      composerToggleBtn.textContent = "Add comment";
     },
     onSubmit: ({ content, voiceNote }) =>
       addCommentToPost({
@@ -543,14 +554,11 @@ function createCommentsSection(post, currentUserId, onPostChange) {
     onSuccess: () => {
       commentUiState.openPanels.add(post.id);
       commentUiState.openCommentForms.delete(post.id);
-
-      if (typeof onPostChange === "function") {
-        onPostChange();
-      }
+      handleCommentsChange();
     }
   });
   setToggleDisplay(topLevelForm, commentFormIsOpen);
-  composerActions.appendChild(composerToggleBtn);
+  composerActions.append(composerAvatar, composerToggleBtn);
 
   const commentsList = createElement("div", { className: "comments-list" });
 
@@ -566,63 +574,291 @@ function createCommentsSection(post, currentUserId, onPostChange) {
       commentsList.appendChild(
         createCommentNode({
           postId: post.id,
+          postOwnerId: post.userId,
           node: commentNode,
           currentUserId,
-          onCommentChange: onPostChange,
+          onCommentChange: handleCommentsChange,
           depth: 0
         })
       );
     });
   }
 
-  toggleBtn.addEventListener("click", () => {
-    const nextOpen = panel.style.display === "none";
-
-    if (nextOpen) {
-      closeOtherCommentsPanels(post.id);
-      setToggleDisplay(panel, true);
-      toggleBtn.classList.add("comment-toggle-btn-active");
-      toggleBtn.textContent = getCommentsToggleLabel(true, comments.length);
-      commentUiState.openPanels.clear();
-      commentUiState.openPanels.add(post.id);
-      focusCommentsPanel(panel);
-    } else {
-      closeCommentsPanel(post.id);
-    }
-  });
-
   composerToggleBtn.addEventListener("click", () => {
-    const nextOpen = topLevelForm.style.display === "none";
-
-    setToggleDisplay(topLevelForm, nextOpen);
-    composerToggleBtn.textContent = nextOpen ? "Hide comment box" : "Add comment";
-
-    if (nextOpen) {
+    if (topLevelForm.style.display === "none") {
+      setToggleDisplay(topLevelForm, true);
       commentUiState.openCommentForms.add(post.id);
       focusCommentForm(topLevelForm);
-    } else {
-      commentUiState.openCommentForms.delete(post.id);
-      resetCommentForm(topLevelForm);
+      return;
     }
+
+    focusCommentForm(topLevelForm);
   });
 
-  commentUiState.panelEntries.set(post.id, {
-    panel,
-    toggleBtn,
-    topLevelForm,
-    composerToggleBtn,
-    getCommentsCount: () => getCommentsForPost(post.id).length
-  });
-
-  header.appendChild(controls);
+  header.append(title, controls);
   panel.append(composerActions, topLevelForm, commentsList);
   section.append(header, panel);
 
   return section;
 }
 
+function createCommentsSortControl({ postId, sortOrder, onSortChange }) {
+  const sortLabel = createElement("div", {
+    className: "comments-sort-label"
+  });
+  const sortTrigger = createElement("button", {
+    className: "comments-sort-trigger",
+    type: "button",
+    attributes: {
+      "aria-label": `Sort comments for post ${postId}`,
+      title: "Sort comments",
+      "aria-haspopup": "menu",
+      "aria-expanded": "false"
+    }
+  });
+  sortTrigger.appendChild(createCommentsSortIcon());
+
+  const sortMenu = createElement("div", {
+    className: "comments-sort-menu",
+    attributes: {
+      role: "menu",
+      "aria-label": `Sort options for post ${postId}`
+    }
+  });
+  setToggleDisplay(sortMenu, false);
+
+  let sortMenuIsOpen = false;
+  let removeSortMenuListeners = () => {};
+
+  [
+    { value: "newest", label: "Newest comments" },
+    { value: "oldest", label: "Oldest comments" }
+  ].forEach(({ value, label }) => {
+    const optionBtn = createElement("button", {
+      className: `comments-sort-option${sortOrder === value ? " comments-sort-option-active" : ""}`,
+      type: "button",
+      text: label,
+      attributes: {
+        role: "menuitemradio",
+        "aria-checked": sortOrder === value ? "true" : "false"
+      }
+    });
+
+    optionBtn.addEventListener("click", () => {
+      closeSortMenu();
+
+      if (typeof onSortChange === "function") {
+        onSortChange(value);
+      }
+    });
+
+    sortMenu.appendChild(optionBtn);
+  });
+
+  function closeSortMenu() {
+    if (!sortMenuIsOpen) {
+      return;
+    }
+
+    sortMenuIsOpen = false;
+    setToggleDisplay(sortMenu, false);
+    sortTrigger.setAttribute("aria-expanded", "false");
+    removeSortMenuListeners();
+    removeSortMenuListeners = () => {};
+  }
+
+  function openSortMenu() {
+    if (sortMenuIsOpen) {
+      return;
+    }
+
+    sortMenuIsOpen = true;
+    setToggleDisplay(sortMenu, true);
+    sortTrigger.setAttribute("aria-expanded", "true");
+
+    const handleGlobalPointerDown = (event) => {
+      if (!sortLabel.contains(event.target)) {
+        closeSortMenu();
+      }
+    };
+
+    const handleGlobalKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeSortMenu();
+        sortTrigger.focus({ preventScroll: true });
+      }
+    };
+
+    window.addEventListener("pointerdown", handleGlobalPointerDown);
+    window.addEventListener("keydown", handleGlobalKeyDown);
+
+    removeSortMenuListeners = () => {
+      window.removeEventListener("pointerdown", handleGlobalPointerDown);
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }
+
+  sortTrigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+
+    if (sortMenuIsOpen) {
+      closeSortMenu();
+      return;
+    }
+
+    openSortMenu();
+  });
+
+  sortLabel.append(sortTrigger, sortMenu);
+  return sortLabel;
+}
+
+function openCommentsSheet({ postId, currentUserId, onPostChange, focusCommentId = null }) {
+  const post = getPostById(postId);
+
+  if (!post) {
+    closeCommentsSheet();
+    return;
+  }
+
+  let root = document.getElementById("comments-sheet-root");
+  let body = root?.querySelector(".comments-sheet-body") || null;
+  let previousScrollTop = 0;
+
+  if (body) {
+    previousScrollTop = body.querySelector(".comments-panel")?.scrollTop || 0;
+  }
+
+  if (!root || !body) {
+    root = createElement("div", {
+      id: "comments-sheet-root",
+      className: "comments-sheet-root"
+    });
+    const overlay = createElement("div", {
+      className: "comments-sheet-overlay"
+    });
+    const container = createElement("div", {
+      className: "comments-sheet-container"
+    });
+    const card = createElement("div", {
+      className: "comments-sheet-card",
+      attributes: {
+        role: "dialog",
+        "aria-modal": "true",
+        "aria-label": "Comments"
+      }
+    });
+    const chrome = createElement("div", {
+      className: "comments-sheet-chrome"
+    });
+    const handle = createElement("span", {
+      className: "comments-sheet-handle",
+      attributes: {
+        "aria-hidden": "true"
+      }
+    });
+    const closeBtn = createElement("button", {
+      className: "comments-sheet-close-btn",
+      type: "button",
+      attributes: {
+        "aria-label": "Close comments",
+        title: "Close comments"
+      }
+    });
+    body = createElement("div", {
+      className: "comments-sheet-body"
+    });
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeCommentsSheet();
+      }
+    };
+
+    root._commentsSheetKeyDown = handleKeyDown;
+    document.addEventListener("keydown", handleKeyDown);
+
+    overlay.addEventListener("click", closeCommentsSheet);
+    container.addEventListener("click", (event) => {
+      if (event.target === container) {
+        closeCommentsSheet();
+      }
+    });
+    card.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    closeBtn.addEventListener("click", closeCommentsSheet);
+    closeBtn.appendChild(createCommentsCloseIcon());
+    chrome.append(handle, closeBtn);
+    card.append(chrome, body);
+    container.appendChild(card);
+    root.append(overlay, container);
+    document.body.appendChild(root);
+  }
+
+  document.body.classList.add("comments-sheet-open");
+  commentUiState.activeSheetPostId = postId;
+  commentUiState.activeSheetContext = {
+    postId,
+    currentUserId,
+    onPostChange
+  };
+
+  body.replaceChildren(createCommentsSheetContent(post, currentUserId, onPostChange));
+
+  const nextPanel = body.querySelector(".comments-panel");
+
+  if (nextPanel) {
+    if (focusCommentId) {
+      window.requestAnimationFrame(() => {
+        focusCommentInSheet(focusCommentId);
+      });
+    } else {
+      nextPanel.scrollTop = previousScrollTop;
+    }
+  }
+}
+
+function closeCommentsSheet() {
+  const root = document.getElementById("comments-sheet-root");
+
+  document.body.classList.remove("comments-sheet-open");
+
+  if (!root) {
+    commentUiState.activeSheetPostId = null;
+    commentUiState.activeSheetContext = null;
+    return;
+  }
+
+  if (typeof root._commentsSheetKeyDown === "function") {
+    document.removeEventListener("keydown", root._commentsSheetKeyDown);
+  }
+
+  root.remove();
+  commentUiState.activeSheetPostId = null;
+  commentUiState.activeSheetContext = null;
+}
+
+function createCommentsCloseIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("comments-sheet-close-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute("d", "M6 6 18 18M18 6 6 18");
+  svg.appendChild(path);
+
+  return svg;
+}
+
 function createCommentNode({
   postId,
+  postOwnerId,
   node,
   currentUserId,
   onCommentChange,
@@ -728,6 +964,7 @@ function createCommentNode({
       repliesList.appendChild(
         createCommentNode({
           postId,
+          postOwnerId,
           node: childNode,
           currentUserId,
           onCommentChange,
@@ -770,6 +1007,7 @@ function createCommentNode({
 
   const commentCard = createCommentCard(node, author, {
     isReply: depth > 0,
+    isPostAuthor: node.userId === postOwnerId,
     replyingTo: depth > 0 ? parentAuthorName : "",
     repliesCount: node.children.length,
     repliesExpanded: repliesListIsOpen,
@@ -1705,6 +1943,31 @@ function focusCommentById(postId, commentId) {
   });
 }
 
+function focusCommentInSheet(commentId) {
+  if (!commentId) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    const root = document.getElementById("comments-sheet-root");
+    const panel = root?.querySelector(".comments-panel");
+    const commentTarget = root?.querySelector(`[data-comment-id="${commentId}"]`);
+
+    if (!panel || !commentTarget) {
+      return;
+    }
+
+    commentTarget.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest"
+    });
+
+    window.requestAnimationFrame(() => {
+      panel.focus({ preventScroll: true });
+    });
+  });
+}
+
 function closeOtherCommentsPanels(currentPostId) {
   for (const [postId, entry] of commentUiState.panelEntries.entries()) {
     if (!entry?.panel?.isConnected) {
@@ -1744,7 +2007,7 @@ function closeCommentsPanel(postId) {
   }
 
   if (entry.composerToggleBtn) {
-    entry.composerToggleBtn.textContent = "Add comment";
+    entry.composerToggleBtn.textContent = "Add a comment...";
   }
 }
 
@@ -1800,9 +2063,8 @@ function createPostContent(post) {
 }
 
 function getCommentsToggleLabel(isOpen, count) {
-  return isOpen
-    ? `\u{1F4AC} Hide comments (${count})`
-    : `\u{1F4AC} Comments (${count})`;
+  const safeCount = Number.isFinite(count) ? count : 0;
+  return `${formatCompactCount(safeCount)} ${safeCount === 1 ? "Comment" : "Comments"}`;
 }
 
 function countDescendants(node) {

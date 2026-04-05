@@ -10,6 +10,7 @@ import {
   validateUsername,
   validateTownship,
   validateExtension,
+  validatePhoneNumber,
   validatePasswordConfirmation,
   validatePassword,
   validateCurrentPassword
@@ -25,12 +26,14 @@ function makeError(code, field, message) {
 
 export async function registerUser({
   username,
+  phoneNumber = "",
   township,
   extension,
   password,
   confirmPassword
 }) {
   const safeUsername = validateUsername(username);
+  const safePhoneNumber = validatePhoneNumber(phoneNumber);
   const safeTownship = validateTownship(township);
   const safeExtension = validateExtension(extension);
   const safePassword = validatePasswordConfirmation(password, confirmPassword);
@@ -38,6 +41,7 @@ export async function registerUser({
 
   const user = createAndStoreUser({
     username: safeUsername,
+    phoneNumber: safePhoneNumber,
     location: {
       township: safeTownship,
       extension: safeExtension
@@ -71,6 +75,7 @@ export async function loginUser({ username, password }) {
 export async function updateAuthenticatedUserProfile({
   currentUser,
   username,
+  phoneNumber,
   township,
   extension,
   avatarDataUrl,
@@ -105,6 +110,7 @@ export async function updateAuthenticatedUserProfile({
   return updateUserProfile({
     userId: currentUser.id,
     username,
+    phoneNumber,
     township,
     extension,
     passwordHash,

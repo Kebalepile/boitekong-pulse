@@ -3,6 +3,7 @@ import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { createUser } from "../models/userModel.js";
 import {
   validateUsername,
+  validatePhoneNumber,
   validateTownship,
   validateExtension
 } from "../utils/validators.js";
@@ -18,6 +19,7 @@ function normalizeUserRecord(user = {}) {
   return {
     ...user,
     avatarDataUrl: typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : "",
+    phoneNumber: typeof user.phoneNumber === "string" ? user.phoneNumber : "",
     followingUserIds: Array.isArray(user.followingUserIds)
       ? Array.from(
           new Set(
@@ -54,14 +56,14 @@ export function findUserById(userId) {
   return users.find((user) => user.id === userId) || null;
 }
 
-export function createAndStoreUser({ username, location, passwordHash }) {
+export function createAndStoreUser({ username, location, passwordHash, phoneNumber = "" }) {
   const existingUser = findUserByUsername(username);
 
   if (existingUser) {
     throw makeError("USERNAME_EXISTS", "username", "Username already exists.");
   }
 
-  const user = createUser({ username, location, passwordHash });
+  const user = createUser({ username, location, passwordHash, phoneNumber });
   const users = getUsers();
 
   users.push(user);
@@ -73,6 +75,7 @@ export function createAndStoreUser({ username, location, passwordHash }) {
 export function updateUserProfile({
   userId,
   username,
+  phoneNumber,
   township,
   extension,
   passwordHash,
@@ -86,6 +89,7 @@ export function updateUserProfile({
   }
 
   const safeUsername = validateUsername(username);
+  const safePhoneNumber = validatePhoneNumber(phoneNumber);
   const safeTownship = validateTownship(township);
   const safeExtension = validateExtension(extension);
 
@@ -102,6 +106,7 @@ export function updateUserProfile({
   const updatedUser = {
     ...currentRecord,
     username: safeUsername,
+    phoneNumber: safePhoneNumber,
     location: {
       township: safeTownship,
       extension: safeExtension
@@ -138,6 +143,12 @@ export function clearCurrentUser() {
 
 export function getFollowerCount(userId) {
   return getUsers().filter((user) => user.followingUserIds.includes(userId)).length;
+}
+
+export function getFollowerUsers(userId, { limit = Infinity } = {}) {
+  return getUsers()
+    .filter((user) => user.followingUserIds.includes(userId))
+    .slice(0, limit);
 }
 
 export function getFollowingUsers(userId, { limit = Infinity } = {}) {
