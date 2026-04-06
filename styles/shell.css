@@ -1057,16 +1057,17 @@
 
 @media (min-width: 720px) {
   .topbar {
-    width: 100%;
-    max-width: 980px;
-    margin-inline: 0;
-    top: 12px;
-    border: 1px solid var(--border-soft);
-    border-radius: 12px;
+    width: calc(100% + 36px);
+    max-width: none;
+    margin-inline: -18px;
+    top: 0;
+    border: none;
+    border-bottom: 1px solid var(--border-soft);
+    border-radius: 0;
   }
 
   .feed-shell {
-    padding-top: 10px;
+    padding-top: 0;
     padding-bottom: 36px;
   }
 }

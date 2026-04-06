@@ -30,6 +30,12 @@ export function renderEditPost(app, currentUser, payload) {
     return;
   }
 
+  if (post.voiceNote?.dataUrl) {
+    showToast("Voice-note posts can't be edited. Delete and repost instead.", "error");
+    navigate("feed");
+    return;
+  }
+
   const shell = createElement("section", { className: "feed-shell" });
   const navbar = createNavbar(currentUser, "create-post");
 
@@ -48,7 +54,7 @@ export function renderEditPost(app, currentUser, payload) {
   });
   const infoText = createElement("p", {
     className: "section-copy",
-    text: "Tighten the wording, refresh the details, and keep the update sharp for people in your area."
+    text: "Edit the wording only. Your original post metadata stays attached to the post."
   });
 
   infoCard.append(infoEyebrow, infoTitle, infoText);
@@ -56,17 +62,13 @@ export function renderEditPost(app, currentUser, payload) {
   const formCard = createElement("section", {
     className: "profile-card editor-card editor-form-card"
   });
-  const formEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Editing"
-  });
   const formTitle = createElement("h2", {
     className: "section-title",
     text: "Update post"
   });
   const formText = createElement("p", {
     className: "section-copy",
-    text: "Your original created time stays intact, so focus only on what needs to change."
+    text: "Keep the update sharp and direct. Voice-note posts can only be deleted, not edited."
   });
 
   const form = createElement("form", {
@@ -79,37 +81,6 @@ export function renderEditPost(app, currentUser, payload) {
     inputId: "edit-post-content",
     placeholder: "Update your post",
     value: post.content
-  });
-
-  const imageField = createField({
-    labelText: "Image URL (optional)",
-    inputId: "edit-post-image",
-    type: "url",
-    placeholder: "https://example.com/image.jpg",
-    value: post.image || "",
-    autocomplete: "off",
-    required: false,
-    helperText: "Optional for now."
-  });
-
-  const townshipField = createField({
-    labelText: "Township",
-    inputId: "edit-post-township",
-    type: "text",
-    placeholder: "e.g. Boitekong",
-    value: post.location.township,
-    autocomplete: "address-level2",
-    helperText: "This is your B-Point township."
-  });
-
-  const extensionField = createField({
-    labelText: "Extension",
-    inputId: "edit-post-extension",
-    type: "text",
-    placeholder: "e.g. Ext 2",
-    value: post.location.extension,
-    autocomplete: "off",
-    helperText: 'Example: "Ext 2"'
   });
 
   const actions = createElement("div", { className: "form-actions" });
@@ -129,9 +100,9 @@ export function renderEditPost(app, currentUser, payload) {
   cancelBtn.addEventListener("click", () => navigate("feed"));
 
   actions.append(cancelBtn, submitBtn);
-  form.append(contentField, imageField, townshipField, extensionField, actions);
+  form.append(contentField, actions);
 
-  formCard.append(formEyebrow, formTitle, formText, form);
+  formCard.append(formTitle, formText, form);
   main.append(infoCard, formCard);
   shell.append(navbar, main);
   app.appendChild(shell);
@@ -143,20 +114,14 @@ export function renderEditPost(app, currentUser, payload) {
     clearFormErrors(form);
 
     const content = document.getElementById("edit-post-content").value;
-    const image = document.getElementById("edit-post-image").value;
-    const township = document.getElementById("edit-post-township").value;
-    const extension = document.getElementById("edit-post-extension").value;
 
     try {
       updatePost({
         postId: post.id,
         userId: currentUser.id,
         content,
-        image,
-        location: {
-          township,
-          extension
-        }
+        image: post.image || "",
+        location: post.location
       });
 
       showToast("Post updated successfully.", "success");
@@ -165,47 +130,6 @@ export function renderEditPost(app, currentUser, payload) {
       handleEditPostError(error);
     }
   });
-}
-
-function createField({
-  labelText,
-  inputId,
-  type,
-  placeholder,
-  value,
-  autocomplete,
-  required = true,
-  helperText = ""
-}) {
-  const wrapper = createElement("div", { className: "field-group" });
-
-  const label = createElement("label", {
-    className: "form-label",
-    text: labelText
-  });
-
-  const input = createElement("input", {
-    className: "form-input",
-    id: inputId,
-    type,
-    placeholder,
-    autocomplete,
-    required
-  });
-
-  input.value = value;
-
-  const helper = createElement("p", {
-    className: "field-helper",
-    text: helperText
-  });
-
-  const error = createFieldError(inputId);
-
-  label.appendChild(input);
-  wrapper.append(label, helper, error);
-
-  return wrapper;
 }
 
 function createTextAreaField({ labelText, inputId, placeholder, value }) {
@@ -266,25 +190,9 @@ function attachCharacterCounter(inputId, counterId) {
 
 function handleEditPostError(error) {
   const message = error.message || "Failed to update post.";
-  const lower = message.toLowerCase();
 
-  if (lower.includes("post content")) {
+  if (error?.field === "content" || message.toLowerCase().includes("post content")) {
     setFieldError("edit-post-content", message);
-    return;
-  }
-
-  if (lower.includes("image url")) {
-    setFieldError("edit-post-image", message);
-    return;
-  }
-
-  if (lower.includes("township")) {
-    setFieldError("edit-post-township", message);
-    return;
-  }
-
-  if (lower.includes("extension")) {
-    setFieldError("edit-post-extension", message);
     return;
   }
 
