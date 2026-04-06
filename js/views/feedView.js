@@ -27,10 +27,6 @@ export function renderFeed(app, currentUser, payload = null) {
   });
   const posts = getVisiblePosts(currentUser.id);
 
-  const eyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Township pulse"
-  });
   const feedTitle = createElement("h2", {
     className: "section-title",
     text: "Community feed"
@@ -75,7 +71,7 @@ export function renderFeed(app, currentUser, payload = null) {
   });
 
   filters.append(townshipInput, extensionInput, clearBtn);
-  feedHeader.append(eyebrow, feedTitle, feedText, statScroller, filters);
+  feedHeader.append(feedTitle, feedText, statScroller, filters);
 
   const feedList = createElement("section", { className: "feed-list" });
 

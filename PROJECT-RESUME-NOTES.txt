@@ -1,0 +1,489 @@
+BOITEKONG PULSE - PROJECT RESUME NOTES
+Date: 2026-04-06
+
+PURPOSE OF THIS FILE
+- This file is the handoff note for tomorrow.
+- It explains what the app is, what has already been built, what is left, what phase we are in, and what order we should continue in.
+- If Codex has forgotten context tomorrow, resume from this file first.
+
+PROJECT NAME
+- Boitekong Pulse
+
+PROJECT GOAL
+- Boitekong Pulse is a mobile-first township community web app.
+- It is built for local updates, replies, comments, direct messages, voice notes, notifications, search, and community reporting.
+- The product direction is: local, township-first, voice-friendly, and community-centered.
+
+CURRENT APP STATE
+- The app is currently a frontend-first prototype.
+- Data is still stored in browser localStorage.
+- There is no real backend yet.
+- There is no real multi-device sync yet.
+- There is no real push notification backend yet.
+- Reports exist as submission flow only, not as moderator UI.
+- Voice notes exist in the prototype and are currently stored in frontend/browser memory/local storage patterns.
+
+CURRENT PHASE
+- We are at the end of Phase 6.
+- Phase 6 = frontend feature build + UX polish + cleanup/stabilization.
+- Phase 7 should begin next.
+
+RECOMMENDED VERSION LABELS
+- Current internal status: Phase 6 complete-ish / frontend prototype mature.
+- Next step: Phase 7 = backend foundation.
+- Suggested next milestone labels:
+  - Phase 7 / v0.7 = backend scaffold + auth/users
+  - Phase 8 / v0.8 = posts/comments/messages/notifications API migration
+  - Phase 9 / v0.9 = moderation/report backend + OTP + real media handling
+  - Beta / v1.0-beta = responsive sweep + manual QA + deployment prep
+
+ROOT PROJECT FILES
+- index.html
+- manifest.webmanifest
+- service-worker.js
+- assets/
+- js/
+- styles/
+
+IMPORTANT STORAGE KEYS IN THE CURRENT PROTOTYPE
+- USERS: bp_users
+- POSTS: bp_posts
+- CURRENT_USER: bp_current_user
+- CONVERSATIONS: bp_conversations
+- NOTIFICATIONS: bp_notifications
+- REPORTS: bp_reports
+- CREATE_POST_BRIEF_DISMISSED: bp_create_post_brief_dismissed
+
+MAIN ROUTES CURRENTLY IN USE
+- login
+- register
+- feed
+- profile
+- create-post
+- edit-post
+- search
+- messages
+
+WHAT HAS ALREADY BEEN BUILT
+
+1. AUTH
+- Login page exists.
+- Register page exists.
+- Login accepts either username or phone number in one input.
+- Register requires phone number.
+- Register has a 16+ checkbox.
+- Auth screens were redesigned closer to Instagram style:
+  - floating placeholder labels
+  - required-field red state
+  - cleaner CTA/buttons
+  - footer area present
+- Brand copy and naming now use "Boitekong Pulse."
+
+2. PROFILE
+- Profile view exists.
+- Edit profile exists.
+- User can update:
+  - username
+  - phone number
+  - avatar
+  - township
+  - extension
+  - password
+- Invite button exists in profile:
+  - uses Web Share API when available
+  - clipboard fallback otherwise
+
+3. FEED / POSTS
+- Feed exists.
+- Text posts exist.
+- Voice-note posts exist.
+- Create post exists with two modes:
+  - Text update
+  - Voice note
+- Voice-note post length is capped at 1 minute.
+- Create post no longer asks for image/township/extension.
+- B-Point location is taken from the current user profile.
+- Edit post now matches the new post model better:
+  - text-only editing
+  - voice-note posts cannot be edited
+  - voice-note posts must be deleted and reposted
+- Post owners can delete their own posts from the 3-dot menu.
+
+4. COMMENTS / REPLIES
+- Comments exist.
+- Replies exist.
+- Text comments are capped at 300 characters.
+- Voice-note comments and replies exist.
+- Report action exists for comments and replies.
+- Delete/edit own comment/reply flow exists.
+- Comment/reply voice-note styling has been brought closer to DM styling.
+- Comments and replies support batching / "See more."
+
+5. DIRECT MESSAGES / MESSENGER
+- Messages screen exists.
+- User discovery in Messages exists.
+- Search people by name/location exists in Messages.
+- DM toggle exists:
+  - enable/disable direct messages
+- Block / unblock exists from conversation actions.
+- Sending rules exist:
+  - if I disabled DMs, I cannot send
+  - if the other user disabled DMs, I cannot send
+  - if blocked either way, messaging is blocked
+- Text messages exist.
+- Voice-note messages exist.
+- DM voice notes are capped at 1 minute.
+- Voice-note UX in DMs has been heavily polished:
+  - recorder state
+  - preview state
+  - posted bubble state
+  - playback speed retained
+- Message edit/delete behavior exists.
+- Privacy-friendly DM previews were added:
+  - inbox preview does not reveal deleted content
+  - notifications do not reveal message body text
+
+6. NOTIFICATIONS
+- In-app notifications exist.
+- Notification toggle exists:
+  - user can turn notifications on/off
+- Desktop/browser notifications were added for supported browsers.
+- Notification click behavior is wired:
+  - DM -> opens conversation
+  - follow -> opens user preview
+  - comment -> opens relevant post/comments
+  - reply -> opens relevant post/comments
+- Follow notifications exist.
+- Comment-on-post notifications exist.
+- Reply-to-comment notifications exist.
+- Notifications respect hidden reported content for the reporting user.
+
+7. SEARCH
+- Search screen exists.
+- User search exists.
+- Post search exists.
+- Search batching / "See more" exists.
+
+8. REPORTING
+- Post report flow exists.
+- Comment/reply report flow exists.
+- Preset reasons exist.
+- "Other" note is limited to 120 characters.
+- Duplicate reports from the same user on the same target are blocked.
+- Optional "hide for me" exists:
+  - hidden reported post/comment is removed from that reporter's view
+  - related notifications are also suppressed for that same user
+- Moderator UI is NOT part of the frontend plan right now.
+
+9. UI / POLISH / BRAND
+- Brand renamed from "Boitekong Now" to "Boitekong Pulse."
+- App icon / logo now use the shared asset in assets/app-icon.png.
+- Login showcase and auth pages have been polished heavily.
+- Side drawer cleanup is done:
+  - removed username/avatar/B-Point block
+  - install button added
+  - contact overflow fixed
+- Global scrollbar, side drawer scrollbar, and comments panel scrollbar were hidden.
+- Top navbar now touches the top and side edges even on larger viewports.
+
+IMPORTANT PRODUCT DECISIONS ALREADY MADE
+- Create post no longer uses manual township/extension/image fields.
+- B-Point comes from user profile.
+- Voice-note posts cannot be edited.
+- Voice-note posts can be deleted.
+- Reports are submission-only for now.
+- Moderator tools are postponed until backend + moderator accounts.
+- Responsive final sweep is postponed until later beta prep.
+- Legal/footer content pages and install-button content hookup are postponed.
+
+KNOWN FRONTEND ITEMS LEFT BEFORE OR DURING BACKEND
+- Manual browser QA pass across all main flows.
+- Final responsive sweep across all viewport sizes later.
+- Final visual consistency pass if needed:
+  - voice-note UIs across feed/comments/replies/DMs
+  - auth edge-state polish
+  - large-screen layout polish if anything still looks off
+- Footer legal items need actual content/pages later.
+- Install button needs full hookup/content later.
+- PWA caching/icon/install behavior should be retested after backend integration.
+
+WHAT DOES NOT NEED TO BE BUILT IN FRONTEND RIGHT NOW
+- Moderator dashboard
+- Moderator decision tools
+- Report review UI in the app
+- Ban/remove-post admin tooling in the frontend
+- Full legal pages/content
+- Final install experience content
+- Full responsive perfection before backend
+
+BACKEND PHASE - WHAT WE SHOULD BUILD NEXT
+
+PHASE 7 GOAL
+- Move from localStorage prototype to real backend foundation.
+- Keep current UX and current frontend data flows where possible.
+- Replace localStorage service internals with API-backed versions over time.
+
+RECOMMENDED BACKEND STACK
+- Node.js
+- Express
+- MongoDB
+- Mongoose
+- JWT or session-based auth
+- SMS OTP provider later for phone verification
+- Cloud storage / media service for avatars, images, and voice notes
+
+WHY MEDIA STORAGE MATTERS
+- We should NOT keep voice notes and image payloads as base64 in the long-term backend.
+- Backend should store file metadata + URLs, not giant data URLs in documents.
+- Use object storage or media hosting for:
+  - profile avatars
+  - post images if reintroduced or supported later
+  - voice notes in posts
+  - voice notes in comments/replies
+  - voice notes in direct messages
+
+RECOMMENDED BACKEND DATA MODEL DIRECTION
+
+1. USERS
+- id
+- username
+- phoneNumber
+- passwordHash
+- avatarUrl
+- location:
+  - township
+  - extension
+- directMessagesEnabled
+- notificationsEnabled
+- blockedUserIds
+- createdAt
+- updatedAt
+- later:
+  - phoneVerified
+  - lastSeen
+  - roles (user/moderator/admin)
+
+2. POSTS
+- id
+- userId
+- content
+- imageUrl or null
+- voiceNote object or media reference
+- location:
+  - township
+  - extension
+- reactions
+- createdAt
+- updatedAt
+
+3. COMMENTS
+OPTION A
+- keep comments embedded inside posts like the current prototype
+
+OPTION B
+- separate collection for comments/replies
+- recommended if scale and moderation complexity are expected
+
+RECOMMENDATION
+- Use a separate comments collection if possible:
+  - id
+  - postId
+  - parentId
+  - userId
+  - content
+  - voiceNote
+  - reactions
+  - createdAt
+  - updatedAt
+  - deleted state if needed later
+
+4. CONVERSATIONS
+- id
+- participantIds[]
+- archivedBy[]
+- createdAt
+- updatedAt
+
+5. MESSAGES
+- id
+- conversationId
+- senderId
+- text
+- voiceNote
+- createdAt
+- updatedAt
+- deletedForEveryone flag or status
+- seenBy / seenAt
+
+6. NOTIFICATIONS
+- id
+- userId
+- actorUserId
+- type
+- postId
+- commentId
+- conversationId
+- messageId
+- read
+- createdAt
+
+7. REPORTS
+- id
+- reporterUserId
+- targetType
+- targetId
+- reason
+- note
+- hideForReporter
+- createdAt
+- later moderation fields:
+  - status
+  - reviewerId
+  - decision
+  - decisionNote
+
+8. OTP / PHONE VERIFICATION
+- id
+- userId or phoneNumber
+- otpCodeHash
+- expiresAt
+- verifiedAt
+- attempt count / cooldown metadata
+
+BACKEND IMPLEMENTATION ORDER
+
+STEP 1
+- Scaffold backend app
+- config
+- environment variables
+- Mongo connection
+- health route
+- auth base routes
+
+STEP 2
+- Users/auth
+- register
+- login
+- password hashing
+- username uniqueness
+- phone uniqueness
+- current user endpoint
+
+STEP 3
+- Profile update endpoints
+- avatar upload handling
+- location update
+- DM toggle
+- notifications toggle
+- block/unblock
+
+STEP 4
+- Posts
+- create post
+- edit text post
+- delete post
+- get feed
+- get posts by user
+- reactions
+
+STEP 5
+- Comments/replies
+- add comment
+- add reply
+- edit own comment
+- delete own comment
+- reactions
+
+STEP 6
+- Messages
+- list conversations
+- open/create conversation
+- send text
+- send voice note
+- delete/edit where allowed
+- seen state
+- block/DM-disabled checks on backend too
+
+STEP 7
+- Notifications
+- notification generation on backend
+- read/unread state
+- clear/read endpoints
+- optional real-time later
+
+STEP 8
+- Reports
+- create report endpoint
+- hide-for-me logic
+- moderation-readiness storage
+- no moderator frontend yet
+
+STEP 9
+- Phone OTP verification
+- SMS provider hookup
+- verify phone flow
+- resend / rate limit
+
+STEP 10
+- Replace frontend localStorage service internals with API calls
+- keep view/component APIs stable where possible
+
+IMPORTANT FRONTEND-TO-BACKEND MIGRATION RULE
+- Do not rewrite the whole UI.
+- Keep the views/components mostly intact.
+- Replace service internals first:
+  - authService.js
+  - userService.js
+  - postService.js
+  - messageService.js
+  - notificationService.js
+  - reportService.js
+
+THIS WILL MAKE THE TRANSITION CLEANER
+- UI should continue calling the same service functions where possible.
+- Internally, those services will move from localStorage to fetch/API.
+
+WHAT TO DO TOMORROW - RECOMMENDED ORDER
+
+OPTION A - BEST RECOMMENDATION
+1. Read this file first.
+2. Do a short manual QA pass in browser:
+   - login
+   - register
+   - profile/edit profile
+   - create post
+   - edit text post
+   - delete post
+   - comments/replies
+   - DM text
+   - DM voice note
+   - notifications
+   - search
+3. If no serious frontend bugs show up, start backend scaffold immediately.
+
+OPTION B - IF ONE MORE FRONTEND BUG SHOWS UP
+1. Fix only that bug.
+2. Do not add new features.
+3. Then move to backend.
+
+THINGS WE SHOULD NOT WASTE TIME ON TOMORROW
+- New major frontend features
+- Moderator frontend
+- Extra cosmetic experiments
+- Full responsive perfection before backend
+- Hooking footer legal pages before backend
+
+HOW TO RESUME WITH CODEX TOMORROW
+- Tell Codex:
+  "Resume from PROJECT-RESUME-NOTES.txt and continue from Phase 7."
+
+GOOD NEXT PROMPTS FOR TOMORROW
+- "Resume from PROJECT-RESUME-NOTES.txt and scaffold the backend."
+- "Resume from PROJECT-RESUME-NOTES.txt and plan the backend models and routes."
+- "Resume from PROJECT-RESUME-NOTES.txt and start auth/users backend first."
+- "Resume from PROJECT-RESUME-NOTES.txt and do a short frontend QA checklist first."
+
+FINAL RECOMMENDATION
+- Frontend is mature enough to stop feature work for now.
+- The right next move is backend foundation.
+- Tomorrow, begin with a brief QA sweep and then start Phase 7.
