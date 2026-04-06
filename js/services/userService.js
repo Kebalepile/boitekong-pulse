@@ -1,6 +1,7 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { createUser } from "../models/userModel.js";
+import { createNotification } from "./notificationService.js";
 import {
   validateUsername,
   validatePhoneNumber,
@@ -20,6 +21,17 @@ function normalizeUserRecord(user = {}) {
     ...user,
     avatarDataUrl: typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : "",
     phoneNumber: typeof user.phoneNumber === "string" ? user.phoneNumber : "",
+    directMessagesEnabled: user.directMessagesEnabled !== false,
+    notificationsEnabled: user.notificationsEnabled !== false,
+    blockedUserIds: Array.isArray(user.blockedUserIds)
+      ? Array.from(
+          new Set(
+            user.blockedUserIds.filter(
+              (blockedUserId) => typeof blockedUserId === "string" && blockedUserId.trim()
+            )
+          )
+        )
+      : [],
     followingUserIds: Array.isArray(user.followingUserIds)
       ? Array.from(
           new Set(
@@ -51,6 +63,17 @@ export function findUserByUsername(username) {
   return users.find((user) => user.username.toLowerCase() === normalized) || null;
 }
 
+export function findUserByPhoneNumber(phoneNumber) {
+  const users = getUsers();
+  const normalized = validatePhoneNumber(phoneNumber);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return users.find((user) => user.phoneNumber === normalized) || null;
+}
+
 export function findUserById(userId) {
   const users = getUsers();
   return users.find((user) => user.id === userId) || null;
@@ -63,7 +86,13 @@ export function createAndStoreUser({ username, location, passwordHash, phoneNumb
     throw makeError("USERNAME_EXISTS", "username", "Username already exists.");
   }
 
-  const user = createUser({ username, location, passwordHash, phoneNumber });
+  const safePhoneNumber = validatePhoneNumber(phoneNumber);
+
+  if (safePhoneNumber && findUserByPhoneNumber(safePhoneNumber)) {
+    throw makeError("PHONE_NUMBER_EXISTS", "phoneNumber", "Phone number already exists.");
+  }
+
+  const user = createUser({ username, location, passwordHash, phoneNumber: safePhoneNumber });
   const users = getUsers();
 
   users.push(user);
@@ -99,6 +128,14 @@ export function updateUserProfile({
 
   if (usernameTakenByAnotherUser) {
     throw makeError("USERNAME_EXISTS", "username", "Username already exists.");
+  }
+
+  const phoneTakenByAnotherUser = safePhoneNumber
+    ? users.some((user) => user.id !== userId && user.phoneNumber === safePhoneNumber)
+    : false;
+
+  if (phoneTakenByAnotherUser) {
+    throw makeError("PHONE_NUMBER_EXISTS", "phoneNumber", "Phone number already exists.");
   }
 
   const currentRecord = users[userIndex];
@@ -211,6 +248,16 @@ export function followUser({ currentUserId, targetUserId }) {
     setCurrentUser(updatedUser);
   }
 
+  if (currentUserId !== targetUserId && areNotificationsEnabled(targetUserId)) {
+    createNotification({
+      userId: targetUserId,
+      type: "follow",
+      actorUserId: currentUserId,
+      title: "New follower",
+      text: ""
+    });
+  }
+
   return updatedUser;
 }
 
@@ -242,4 +289,195 @@ export function unfollowUser({ currentUserId, targetUserId }) {
   }
 
   return updatedUser;
+}
+
+export function setDirectMessagesEnabled({ userId, enabled }) {
+  const users = getUsers();
+  const userIndex = users.findIndex((user) => user.id === userId);
+
+  if (userIndex === -1) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const updatedUser = {
+    ...users[userIndex],
+    directMessagesEnabled: enabled !== false
+  };
+
+  users[userIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === userId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
+}
+
+export function setNotificationsEnabled({ userId, enabled }) {
+  const users = getUsers();
+  const userIndex = users.findIndex((user) => user.id === userId);
+
+  if (userIndex === -1) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const updatedUser = {
+    ...users[userIndex],
+    notificationsEnabled: enabled !== false
+  };
+
+  users[userIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === userId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
+}
+
+export function areNotificationsEnabled(userId) {
+  if (!userId) {
+    return false;
+  }
+
+  const user = findUserById(userId);
+  return user?.notificationsEnabled !== false;
+}
+
+export function isUserBlocked({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId || currentUserId === targetUserId) {
+    return false;
+  }
+
+  const currentUser = findUserById(currentUserId);
+  return Boolean(currentUser?.blockedUserIds.includes(targetUserId));
+}
+
+export function blockUser({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId) {
+    throw makeError("BLOCK_INVALID", null, "Could not block that user.");
+  }
+
+  if (currentUserId === targetUserId) {
+    throw makeError("BLOCK_SELF", null, "You cannot block yourself.");
+  }
+
+  const users = getUsers();
+  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
+  const targetUser = users.find((user) => user.id === targetUserId);
+
+  if (currentUserIndex === -1 || !targetUser) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const currentUser = users[currentUserIndex];
+
+  if (currentUser.blockedUserIds.includes(targetUserId)) {
+    return currentUser;
+  }
+
+  const updatedUser = {
+    ...currentUser,
+    blockedUserIds: [...currentUser.blockedUserIds, targetUserId]
+  };
+
+  users[currentUserIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === currentUserId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
+}
+
+export function unblockUser({ currentUserId, targetUserId }) {
+  if (!currentUserId || !targetUserId) {
+    throw makeError("BLOCK_INVALID", null, "Could not unblock that user.");
+  }
+
+  const users = getUsers();
+  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
+
+  if (currentUserIndex === -1) {
+    throw makeError("USER_NOT_FOUND", null, "User not found.");
+  }
+
+  const currentUser = users[currentUserIndex];
+  const updatedUser = {
+    ...currentUser,
+    blockedUserIds: currentUser.blockedUserIds.filter(
+      (blockedUserId) => blockedUserId !== targetUserId
+    )
+  };
+
+  users[currentUserIndex] = updatedUser;
+  saveUsers(users);
+
+  if (getCurrentUser()?.id === currentUserId) {
+    setCurrentUser(updatedUser);
+  }
+
+  return updatedUser;
+}
+
+export function getDirectMessageAvailability({ senderUserId, recipientUserId }) {
+  if (!senderUserId || !recipientUserId) {
+    return {
+      allowed: false,
+      code: "DM_INVALID",
+      message: "Could not open direct messages."
+    };
+  }
+
+  const sender = findUserById(senderUserId);
+  const recipient = findUserById(recipientUserId);
+
+  if (!sender || !recipient) {
+    return {
+      allowed: false,
+      code: "USER_NOT_FOUND",
+      message: "User not found."
+    };
+  }
+
+  if (sender.directMessagesEnabled === false) {
+    return {
+      allowed: false,
+      code: "SENDER_DM_DISABLED",
+      message: "You disabled direct messages. Enable them to send messages."
+    };
+  }
+
+  if (recipient.directMessagesEnabled === false) {
+    return {
+      allowed: false,
+      code: "RECIPIENT_DM_DISABLED",
+      message: `${recipient.username} has disabled direct messages.`
+    };
+  }
+
+  if (sender.blockedUserIds.includes(recipientUserId)) {
+    return {
+      allowed: false,
+      code: "SENDER_BLOCKED_RECIPIENT",
+      message: `You blocked ${recipient.username}. Unblock them to continue chatting.`
+    };
+  }
+
+  if (recipient.blockedUserIds.includes(senderUserId)) {
+    return {
+      allowed: false,
+      code: "RECIPIENT_BLOCKED_SENDER",
+      message: `${recipient.username} blocked you.`
+    };
+  }
+
+  return {
+    allowed: true,
+    code: "DM_ALLOWED",
+    message: ""
+  };
 }

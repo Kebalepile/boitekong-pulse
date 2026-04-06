@@ -6,6 +6,7 @@ import { renderProfile } from "./views/profileView.js";
 import { renderCreatePost } from "./views/createPostView.js";
 import { renderEditPost } from "./views/editPostView.js";
 import { renderSearch } from "./views/searchView.js";
+import { renderMessages } from "./views/messagesView.js";
 
 function getAppRoot() {
   return document.getElementById("app");
@@ -26,37 +27,34 @@ export function navigate(routeName, payload = null) {
   const app = getAppRoot();
   if (!app) return;
 
-  if (routeName === "register") {
-    renderRegister(app);
-    return;
+  switch (routeName) {
+    case "login":
+      renderLogin(app);
+      return;
+    case "register":
+      renderRegister(app);
+      return;
+    case "feed":
+      requireAuth(app, renderFeed, payload);
+      return;
+    case "profile":
+      requireAuth(app, renderProfile, payload);
+      return;
+    case "create-post":
+      requireAuth(app, renderCreatePost);
+      return;
+    case "edit-post":
+      requireAuth(app, renderEditPost, payload);
+      return;
+    case "search":
+      requireAuth(app, renderSearch, payload);
+      return;
+    case "messages":
+      requireAuth(app, renderMessages, payload);
+      return;
+    default:
+      renderLogin(app);
   }
-
-  if (routeName === "feed") {
-    requireAuth(app, renderFeed);
-    return;
-  }
-
-  if (routeName === "profile") {
-    requireAuth(app, renderProfile, payload);
-    return;
-  }
-
-  if (routeName === "create-post") {
-    requireAuth(app, renderCreatePost);
-    return;
-  }
-
-  if (routeName === "edit-post") {
-    requireAuth(app, renderEditPost, payload);
-    return;
-  }
-
-  if (routeName === "search") {
-    requireAuth(app, renderSearch, payload);
-    return;
-  }
-
-  renderLogin(app);
 }
 
 export function initRouter() {

@@ -483,7 +483,7 @@
 .editor-card,
 .profile-card {
   background: #ffffff;
-  border-radius: 24px;
+  border-radius: 5px;
   padding: 20px;
   box-shadow: var(--shadow-card);
   border: 1px solid var(--border-soft);
@@ -495,10 +495,206 @@
   background-image: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
 }
 
+.create-post-brief-card {
+  border-radius: 5px;
+}
+
+.create-post-brief-dismiss-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.create-post-brief-dismiss-btn:hover,
+.create-post-brief-dismiss-btn:focus-visible {
+  background: #eef2f7;
+  color: #0f172a;
+}
+
+.create-post-brief-card .section-eyebrow {
+  margin-bottom: 8px;
+  font-family: "Aptos Narrow", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.create-post-brief-card .section-title {
+  margin-bottom: 8px;
+  font-family: Cambria, Georgia, "Times New Roman", serif;
+  font-size: 21px;
+  line-height: 1.12;
+}
+
+.create-post-brief-card .section-copy {
+  max-width: none;
+  font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: justify;
+}
+
+.create-post-brief-card .helper-list {
+  padding-left: 22px;
+  gap: 6px;
+  font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  text-align: justify;
+  list-style-position: outside;
+}
+
+.create-post-brief-card .helper-list li {
+  padding-left: 4px;
+}
+
+.create-post-brief-card .helper-list li::marker {
+  color: #2563eb;
+}
+
 .editor-form-card,
 .profile-form-card {
+  border-radius: 5px;
   background-image:
     linear-gradient(180deg, rgba(255, 255, 255, 1) 0%, rgba(248, 250, 252, 1) 100%);
+}
+
+.create-post-card {
+  display: grid;
+  gap: 16px;
+  border-radius: 5px;
+}
+
+.profile-card.editor-card,
+.profile-card.editor-card.editor-form-card,
+.profile-card.editor-card.create-post-card,
+.profile-card.editor-card.create-post-brief-card {
+  border-radius: 5px;
+}
+
+.create-post-form {
+  gap: 16px;
+}
+
+.create-post-mode-switch {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  width: fit-content;
+  padding: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #dbe5ef;
+}
+
+.create-post-mode-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #64748b;
+  margin: 0;
+}
+
+.create-post-mode-btn + .create-post-mode-btn {
+  border-left: 1px solid #dbe5ef;
+}
+
+.create-post-mode-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.create-post-mode-btn:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.create-post-mode-btn:hover,
+.create-post-mode-btn:focus-visible {
+  transform: none;
+}
+
+.create-post-mode-btn-active {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.create-post-mode-btn-disabled {
+  opacity: 0.48;
+}
+
+.create-post-mode-panel {
+  display: none;
+  gap: 14px;
+}
+
+.create-post-mode-panel-active {
+  display: grid;
+}
+
+.create-post-textarea {
+  min-height: 168px;
+}
+
+.create-post-location-row {
+  margin-top: -2px;
+}
+
+.create-post-actions {
+  padding-top: 4px;
+}
+
+.create-post-voice-intro {
+  display: grid;
+  gap: 4px;
+}
+
+.create-post-voice-title {
+  margin: 0;
+  font-size: 16px;
+  color: #0f172a;
+}
+
+.create-post-voice-copy {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.create-post-voice-composer {
+  gap: 8px;
+}
+
+.create-post-voice-composer .messages-voice-panel {
+  border: none;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.create-post-voice-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.create-post-voice-trigger-copy {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
 }
 
 .profile-edit-card {
@@ -621,17 +817,6 @@
 }
 
 
-.profile-hero-card {
-  display: grid;
-  gap: 18px;
-}
-
-.profile-avatar-panel {
-  display: grid;
-  justify-items: start;
-  gap: 12px;
-}
-
 .profile-avatar-preview-shell {
   padding: 10px;
   border-radius: 28px;
@@ -643,45 +828,6 @@
 
 .profile-avatar-display {
   box-shadow: none;
-}
-
-.profile-avatar-hint {
-  margin: 0;
-  font-size: 13px;
-  color: #64748b;
-}
-
-.profile-hero-copy {
-  display: grid;
-  gap: 10px;
-}
-
-.profile-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.profile-info-chip {
-  display: grid;
-  gap: 4px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #dbe5f0;
-}
-
-.profile-info-chip-label {
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #64748b;
-}
-
-.profile-info-chip-value {
-  font-size: 14px;
-  color: #0f172a;
 }
 
 .avatar-upload-field {

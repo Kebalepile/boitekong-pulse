@@ -75,12 +75,10 @@ body {
 }
 
 .brand-mark-icon {
-  background:
-    radial-gradient(circle at top left, rgba(219, 234, 254, 0.85), transparent 40%),
-    linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+  background: transparent;
   border: none;
   color: #ffffff;
-  box-shadow: 0 18px 34px rgba(37, 99, 235, 0.24);
+  box-shadow: none;
 }
 
 .brand-mark-title,
@@ -94,9 +92,7 @@ body {
 .user-preview-username,
 .user-preview-stat-value,
 .user-preview-following-title,
-.voice-note-status,
-.post-context-pill-activity,
-.post-context-pill-voice {
+.voice-note-status {
   color: #0f172a;
 }
 
@@ -124,8 +120,7 @@ body {
 
 input,
 textarea,
-select,
-.comments-sort-select {
+select {
   background: #ffffff;
   color: #000000;
   border-color: #d8e1eb;
@@ -134,14 +129,12 @@ select,
 
 input:focus,
 textarea:focus,
-select:focus,
-.comments-sort-select:focus {
+select:focus {
   border-color: #2563eb;
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 
-.form-input,
-.comments-sort-select {
+.form-input {
   background: transparent;
   color: #000000;
 }
@@ -260,11 +253,8 @@ select:focus,
 }
 
 .feed-stat-pill,
-.profile-info-chip,
 .user-preview-stat,
-.avatar-upload-panel,
-.post-context-pill-activity,
-.post-context-pill-voice {
+.avatar-upload-panel {
   background: rgba(248, 250, 252, 0.96);
   border-color: var(--border-soft);
 }

@@ -2,10 +2,14 @@ import { clearElement, createElement } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
 import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
 import { searchUsers, searchPosts } from "../services/searchService.js";
-import { getPostsByUserId } from "../services/postService.js";
+import {
+  filterVisiblePostsForUser,
+  getVisiblePostsByUserId
+} from "../services/postService.js";
 import { createPostCard } from "../components/postCard.js";
 import { findUserById } from "../services/userService.js";
 import { createAvatarElement } from "../utils/avatar.js";
+import { SEARCH_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
 
 export function renderSearch(app, currentUser, payload = null) {
   clearElement(app);
@@ -48,6 +52,8 @@ export function renderSearch(app, currentUser, payload = null) {
   searchCard.append(eyebrow, title, description);
 
   const results = createElement("section", { className: "feed-list search-results-list" });
+  let visibleUserCount = SEARCH_BATCH_SIZE;
+  let visiblePostCount = SEARCH_BATCH_SIZE;
 
   main.append(searchCard, results);
   shell.append(navbar, main);
@@ -61,10 +67,20 @@ export function renderSearch(app, currentUser, payload = null) {
 
   function runSearch() {
     if (authorPostsView) {
-      renderPostResults(results, getPostsByUserId(authorUserId), currentUser.id, app, currentUser, {
-        mode: "posts",
-        authorUserId,
-        authorUsername
+      renderPostResults(results, getVisiblePostsByUserId(authorUserId, currentUser.id), {
+        currentUserId: currentUser.id,
+        app,
+        currentUser,
+        searchPayload: {
+          mode: "posts",
+          authorUserId,
+          authorUsername
+        },
+        visibleCount: visiblePostCount,
+        onLoadMore: () => {
+          visiblePostCount += SEARCH_BATCH_SIZE;
+          runSearch();
+        }
       });
       return;
     }
@@ -77,13 +93,30 @@ export function renderSearch(app, currentUser, payload = null) {
     }
 
     if (initialMode === "users") {
-      renderUserResults(results, searchUsers(query));
+      renderUserResults(results, searchUsers(query), {
+        currentUserId: currentUser.id,
+        visibleCount: visibleUserCount,
+        onLoadMore: () => {
+          visibleUserCount += SEARCH_BATCH_SIZE;
+          runSearch();
+        }
+      });
       return;
     }
 
-    renderPostResults(results, searchPosts(query), currentUser.id, app, currentUser, {
-      mode: "posts",
-      query
+    renderPostResults(results, filterVisiblePostsForUser(searchPosts(query), currentUser.id), {
+      currentUserId: currentUser.id,
+      app,
+      currentUser,
+      searchPayload: {
+        mode: "posts",
+        query
+      },
+      visibleCount: visiblePostCount,
+      onLoadMore: () => {
+        visiblePostCount += SEARCH_BATCH_SIZE;
+        runSearch();
+      }
     });
   }
 }
@@ -105,7 +138,7 @@ function renderNoResults(results, label) {
   results.appendChild(card);
 }
 
-function renderUserResults(results, users) {
+function renderUserResults(results, users, { currentUserId, visibleCount, onLoadMore }) {
   clearElement(results);
 
   if (users.length === 0) {
@@ -113,7 +146,9 @@ function renderUserResults(results, users) {
     return;
   }
 
-  users.forEach((user) => {
+  const visibleUsers = users.slice(0, visibleCount);
+
+  visibleUsers.forEach((user) => {
     const card = createElement("button", {
       className: "profile-card search-user-card",
       type: "button",
@@ -142,14 +177,27 @@ function renderUserResults(results, users) {
     card.addEventListener("click", () => {
       showUserPreviewSheet({
         userId: user.id,
-        currentUserId: currentUser.id
+        currentUserId
       });
     });
     results.appendChild(card);
   });
+
+  if (users.length > visibleUsers.length) {
+    results.appendChild(
+      createLoadMoreControl({
+        label: "See more users",
+        onClick: onLoadMore
+      })
+    );
+  }
 }
 
-function renderPostResults(results, posts, currentUserId, app, currentUser, searchPayload) {
+function renderPostResults(
+  results,
+  posts,
+  { currentUserId, app, currentUser, searchPayload, visibleCount, onLoadMore }
+) {
   clearElement(results);
 
   if (posts.length === 0) {
@@ -169,7 +217,9 @@ function renderPostResults(results, posts, currentUserId, app, currentUser, sear
     return;
   }
 
-  posts.forEach((post) => {
+  const visiblePosts = posts.slice(0, visibleCount);
+
+  visiblePosts.forEach((post) => {
     const author = findUserById(post.userId);
     const card = createPostCard(post, author, currentUserId, () => {
       renderSearch(app, currentUser, searchPayload);
@@ -177,4 +227,13 @@ function renderPostResults(results, posts, currentUserId, app, currentUser, sear
 
     results.appendChild(card);
   });
+
+  if (posts.length > visiblePosts.length) {
+    results.appendChild(
+      createLoadMoreControl({
+        label: "See more posts",
+        onClick: onLoadMore
+      })
+    );
+  }
 }

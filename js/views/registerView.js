@@ -13,119 +13,133 @@ import { createBrandMark } from "../components/brandMark.js";
 export function renderRegister(app) {
   clearElement(app);
 
-  const shell = createElement("section", { className: "auth-shell" });
-  const card = createElement("div", { className: "auth-card" });
-  const intro = createElement("div", { className: "auth-intro" });
-  const introEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Join the neighborhood"
-  });
-
+  const shell = createElement("section", { className: "auth-shell auth-shell-register" });
+  const layout = createElement("div", { className: "auth-layout auth-layout-register" });
+  const pane = createElement("section", { className: "auth-pane auth-pane-register" });
+  const card = createElement("div", { className: "auth-card auth-card-register" });
+  const brand = createElement("div", { className: "auth-register-brand" });
+  const header = createElement("div", { className: "auth-card-copy auth-card-copy-register" });
   const title = createElement("h1", {
     className: "auth-title",
     text: "Create your account"
   });
-
   const subtitle = createElement("p", {
     className: "auth-subtitle",
-    text: "Boitekong Now is built for fast local updates, real replies, and voice notes from people nearby."
-  });
-  const featureList = createElement("div", { className: "auth-feature-list" });
-
-  [
-    "Township-first identity",
-    "Comments, replies, and reactions",
-    "Voice-note-ready conversations"
-  ].forEach((itemText) => {
-    featureList.appendChild(
-      createElement("span", {
-        className: "auth-feature-chip",
-        text: itemText
-      })
-    );
+    text: "Join the local platform for township updates, replies, and voice notes that stay close to home."
   });
 
   const form = createElement("form", {
-    className: "auth-form",
+    className: "auth-form auth-form-register",
     id: "register-form"
+  });
+
+  const phoneField = createField({
+    labelText: "Phone number",
+    inputId: "register-phone-number",
+    type: "tel",
+    autocomplete: "tel",
+    attributes: {
+      inputmode: "tel"
+    }
   });
 
   const usernameField = createField({
     labelText: "Username",
     inputId: "register-username",
     type: "text",
-    placeholder: "Choose username",
-    autocomplete: "username",
-    helperText: "3-30 characters. Can include emoji. Maximum 3 spaces."
+    autocomplete: "username"
   });
 
   const townshipField = createField({
     labelText: "Township",
     inputId: "register-township",
     type: "text",
-    placeholder: "e.g. Boitekong",
-    autocomplete: "address-level2",
-    helperText: "Township is text only."
+    autocomplete: "address-level2"
   });
 
   const extensionField = createField({
     labelText: "Extension",
     inputId: "register-extension",
     type: "text",
-    placeholder: "e.g. Ext 2",
-    autocomplete: "off",
-    helperText: 'Example: "Ext 2"'
+    autocomplete: "off"
   });
 
   const passwordField = createField({
     labelText: "Password",
     inputId: "register-password",
     type: "password",
-    placeholder: "Create password",
-    autocomplete: "new-password",
-    helperText: "12-64 characters with upper, lower, number, and special character."
+    autocomplete: "new-password"
   });
 
   const confirmPasswordField = createField({
-    labelText: "Confirm Password",
+    labelText: "Confirm password",
     inputId: "register-confirm-password",
     type: "password",
-    placeholder: "Confirm password",
-    autocomplete: "new-password",
-    helperText: "Must match the password above."
+    autocomplete: "new-password"
   });
+
+  const locationRow = createElement("div", { className: "auth-field-row" });
+  const passwordRow = createElement("div", { className: "auth-field-row" });
+  const ageConfirmField = createAgeConfirmField();
+  locationRow.append(townshipField, extensionField);
+  passwordRow.append(passwordField, confirmPasswordField);
+
+  const legal = createElement("div", { className: "auth-legal-copy-block" });
+  const legalLead = createElement("p", {
+    className: "auth-legal-copy",
+    text:
+      "By tapping Create account, you agree to create an account and to Boitekong Pulse's Terms & Conditions and Privacy Policy."
+  });
+  const legalFollow = createElement("p", {
+    className: "auth-legal-copy",
+    text:
+      "Your phone number is required now and can be verified later with SMS OTP once the backend is connected."
+  });
+  const legalLinks = createElement("p", { className: "auth-legal-links" });
+  legalLinks.append(
+    createElement("span", {
+      className: "auth-legal-link",
+      text: "Terms & Conditions"
+    }),
+    createElement("span", {
+      className: "auth-legal-separator",
+      text: " | "
+    }),
+    createElement("span", {
+      className: "auth-legal-link",
+      text: "Privacy Policy"
+    })
+  );
+  legal.append(legalLead, legalFollow, legalLinks);
 
   const submitBtn = createElement("button", {
     className: "primary-btn auth-submit-btn",
-    text: "Register",
+    text: "Create account",
     type: "submit"
   });
 
-  form.append(
-    usernameField,
-    townshipField,
-    extensionField,
-    passwordField,
-    confirmPasswordField,
-    submitBtn
-  );
-
-  const footer = createElement("div", { className: "auth-footer" });
-  const footerText = createElement("span", {
-    text: "Already have an account?"
-  });
-
   const loginBtn = createElement("button", {
-    className: "link-btn",
-    text: "Log In",
+    className: "secondary-btn auth-outline-btn",
+    text: "I already have an account",
     type: "button",
     id: "go-login"
   });
 
-  footer.append(footerText, loginBtn);
-  intro.append(createBrandMark(), introEyebrow, title, subtitle, featureList);
-  card.append(intro, form, footer);
-  shell.appendChild(card);
+  form.append(
+    phoneField,
+    usernameField,
+    locationRow,
+    passwordRow,
+    ageConfirmField.element,
+    legal,
+    submitBtn
+  );
+  brand.appendChild(createBrandMark({ compact: true, showTagline: false }));
+  header.append(title, subtitle);
+  card.append(brand, header, form, loginBtn);
+  pane.append(card);
+  layout.append(pane);
+  shell.append(layout, createAuthSiteFooter());
   app.appendChild(shell);
 
   loginBtn.addEventListener("click", () => {
@@ -137,14 +151,22 @@ export function renderRegister(app) {
     clearFormErrors(form);
 
     const username = document.getElementById("register-username").value;
+    const phoneNumber = document.getElementById("register-phone-number").value;
     const township = document.getElementById("register-township").value;
     const extension = document.getElementById("register-extension").value;
     const password = document.getElementById("register-password").value;
     const confirmPassword = document.getElementById("register-confirm-password").value;
 
+    if (!ageConfirmField.isChecked()) {
+      ageConfirmField.setInvalid("Confirm that you are 16 or older to continue.");
+      showToast("Confirm that you are 16 or older to continue.", "error");
+      return;
+    }
+
     try {
       await registerUser({
         username,
+        phoneNumber,
         township,
         extension,
         password,
@@ -159,39 +181,151 @@ export function renderRegister(app) {
   });
 }
 
-function createField({ labelText, inputId, type, placeholder, autocomplete, helperText = "" }) {
-  const wrapper = createElement("div", { className: "field-group" });
-
-  const label = createElement("label", {
-    className: "form-label",
-    text: labelText
+function createField({ labelText, inputId, type, autocomplete, attributes = null }) {
+  const wrapper = createElement("div", { className: "field-group auth-field-group" });
+  const fieldShell = createElement("label", {
+    className: "form-label auth-floating-field",
+    attributes: {
+      for: inputId
+    }
   });
-
   const input = createElement("input", {
-    className: "form-input",
+    className: "form-input auth-form-input",
     id: inputId,
     type,
-    placeholder,
+    placeholder: " ",
     required: true,
-    autocomplete
+    autocomplete,
+    attributes: {
+      "aria-label": labelText,
+      ...(attributes || {})
+    }
   });
-
-  const helper = createElement("p", {
-    className: "field-helper",
-    text: helperText
+  const caption = createElement("span", {
+    className: "auth-floating-label",
+    text: labelText
   });
-
   const error = createFieldError(inputId);
 
-  label.appendChild(input);
-  wrapper.append(label, helper, error);
+  const syncFieldState = () => {
+    const missingRequired =
+      input.dataset.touched === "true" && input.required && !input.value.trim();
+    const hasError = input.classList.contains("input-error");
+    fieldShell.classList.toggle("auth-floating-field-invalid", missingRequired || hasError);
+    input.classList.toggle("auth-empty-error", missingRequired);
+  };
+
+  input.addEventListener("blur", () => {
+    input.dataset.touched = "true";
+    syncFieldState();
+  });
+
+  input.addEventListener("input", () => {
+    if (input.classList.contains("input-error")) {
+      input.classList.remove("input-error");
+    }
+
+    if (error.textContent) {
+      error.textContent = "";
+    }
+
+    syncFieldState();
+  });
+
+  input.addEventListener("invalid", () => {
+    input.dataset.touched = "true";
+    syncFieldState();
+  });
+
+  fieldShell.append(input, caption);
+  wrapper.append(fieldShell, error);
 
   return wrapper;
+}
+
+function createAgeConfirmField() {
+  const wrapper = createElement("div", {
+    className: "field-group auth-checkbox-field"
+  });
+  const label = createElement("label", {
+    className: "auth-checkbox-label",
+    attributes: {
+      for: "register-age-confirm"
+    }
+  });
+  const input = createElement("input", {
+    className: "auth-checkbox-input",
+    id: "register-age-confirm",
+    type: "checkbox",
+    attributes: {
+      "aria-describedby": "register-age-confirm-error"
+    }
+  });
+  const copy = createElement("span", {
+    className: "auth-checkbox-copy",
+    text: "I confirm that I am 16 years old or older."
+  });
+  const error = createFieldError("register-age-confirm");
+
+  const clearInvalid = () => {
+    input.classList.remove("input-error");
+    wrapper.classList.remove("auth-checkbox-field-invalid");
+    error.textContent = "";
+  };
+
+  input.addEventListener("change", () => {
+    if (input.checked) {
+      clearInvalid();
+    }
+  });
+
+  label.append(input, copy);
+  wrapper.append(label, error);
+
+  return {
+    element: wrapper,
+    isChecked: () => input.checked,
+    setInvalid: (message) => {
+      input.classList.add("input-error");
+      wrapper.classList.add("auth-checkbox-field-invalid");
+      error.textContent = message;
+    }
+  };
+}
+
+function createAuthSiteFooter() {
+  const footer = createElement("footer", { className: "auth-site-footer" });
+  const links = createElement("div", { className: "auth-site-footer-links" });
+  const meta = createElement("div", { className: "auth-site-footer-meta" });
+
+  ["About", "Help", "Privacy", "Terms & Conditions", "Contact"].forEach((itemText) => {
+    links.appendChild(
+      createElement("span", {
+        className: "auth-site-footer-link",
+        text: itemText
+      })
+    );
+  });
+
+  meta.append(
+    createElement("span", {
+      className: "auth-site-footer-meta-text",
+      text: "English"
+    }),
+    createElement("span", {
+      className: "auth-site-footer-meta-text",
+      text: "Copyright 2025 Boitekong Pulse"
+    })
+  );
+
+  footer.append(links, meta);
+  return footer;
 }
 
 function handleRegisterError(error) {
   const fieldMap = {
     username: "register-username",
+    phoneNumber: "register-phone-number",
     township: "register-township",
     extension: "register-extension",
     password: "register-password",
@@ -200,9 +334,7 @@ function handleRegisterError(error) {
 
   if (error?.field && fieldMap[error.field]) {
     setFieldError(fieldMap[error.field], error.message);
-    if (error.code === "USERNAME_EXISTS") {
-      showToast(error.message, "error");
-    }
+    showToast(error.message, "error");
     return;
   }
 

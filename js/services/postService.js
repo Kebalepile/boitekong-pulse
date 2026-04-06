@@ -2,8 +2,12 @@ import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { createPost } from "../models/postModel.js";
 import { createComment } from "../models/commentModel.js";
+import { createNotification } from "./notificationService.js";
+import { areNotificationsEnabled } from "./userService.js";
+import { getHiddenTargetIdsForUser } from "./reportService.js";
 import {
   validatePostContent,
+  validatePostSubmission,
   validateImageUrl,
   validateTownship,
   validateExtension
@@ -24,12 +28,44 @@ export function getPosts() {
   return posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
+export function filterVisiblePostsForUser(posts, userId) {
+  const safePosts = Array.isArray(posts) ? posts : [];
+  const hiddenPostIds = getHiddenTargetIdsForUser({
+    userId,
+    targetType: "post"
+  });
+
+  if (hiddenPostIds.size === 0) {
+    return safePosts;
+  }
+
+  return safePosts.filter((post) => !hiddenPostIds.has(post.id));
+}
+
+export function getVisiblePosts(userId) {
+  return filterVisiblePostsForUser(getPosts(), userId);
+}
+
+export function getVisiblePostsByUserId(userId, viewerUserId) {
+  return filterVisiblePostsForUser(getPostsByUserId(userId), viewerUserId);
+}
+
 export function savePosts(posts) {
   storage.set(STORAGE_KEYS.POSTS, posts);
 }
 
-export function createAndStorePost({ userId, content, image = "", location }) {
-  const post = createPost({ userId, content, image, location });
+export function createAndStorePost({ userId, content = "", image = "", location, voiceNote = null }) {
+  const safePost = validatePostSubmission({
+    content,
+    voiceNote
+  });
+  const post = createPost({
+    userId,
+    content: safePost.content,
+    image,
+    location,
+    voiceNote: safePost.voiceNote
+  });
   const posts = storage.get(STORAGE_KEYS.POSTS, []);
 
   posts.push(post);
@@ -118,11 +154,11 @@ export function addCommentToPost({
 
   const post = posts[postIndex];
   const comments = Array.isArray(post.comments) ? [...post.comments] : [];
+  const parentComment =
+    parentId !== null ? comments.find((comment) => comment.id === parentId) || null : null;
 
   if (parentId !== null) {
-    const parentExists = comments.some((comment) => comment.id === parentId);
-
-    if (!parentExists) {
+    if (!parentComment) {
       throw makeError("COMMENT_PARENT_NOT_FOUND", null, "Parent comment not found.");
     }
   }
@@ -141,6 +177,31 @@ export function addCommentToPost({
   };
 
   savePosts(posts);
+
+  if (parentComment) {
+    if (parentComment.userId !== userId && areNotificationsEnabled(parentComment.userId)) {
+      createNotification({
+        userId: parentComment.userId,
+        type: "comment_reply",
+        actorUserId: userId,
+        postId,
+        commentId: comment.id,
+        title: "New reply",
+        text: ""
+      });
+    }
+  } else if (post.userId !== userId && areNotificationsEnabled(post.userId)) {
+    createNotification({
+      userId: post.userId,
+      type: "post_comment",
+      actorUserId: userId,
+      postId,
+      commentId: comment.id,
+      title: "New comment",
+      text: ""
+    });
+  }
+
   return comment;
 }
 
@@ -230,6 +291,44 @@ export function getCommentsForPost(postOrId) {
   const post = getPostById(postId);
   if (!post) return [];
   return Array.isArray(post.comments) ? post.comments : [];
+}
+
+export function getVisibleCommentsForPost(postOrId, userId) {
+  const comments = getCommentsForPost(postOrId);
+  const hiddenCommentIds = getHiddenTargetIdsForUser({
+    userId,
+    targetType: "comment"
+  });
+
+  if (hiddenCommentIds.size === 0) {
+    return comments;
+  }
+
+  const hiddenBranchIds = new Set();
+  let foundNewChild = true;
+
+  comments.forEach((comment) => {
+    if (hiddenCommentIds.has(comment.id)) {
+      hiddenBranchIds.add(comment.id);
+    }
+  });
+
+  while (foundNewChild) {
+    foundNewChild = false;
+
+    comments.forEach((comment) => {
+      if (
+        comment.parentId &&
+        hiddenBranchIds.has(comment.parentId) &&
+        !hiddenBranchIds.has(comment.id)
+      ) {
+        hiddenBranchIds.add(comment.id);
+        foundNewChild = true;
+      }
+    });
+  }
+
+  return comments.filter((comment) => !hiddenBranchIds.has(comment.id));
 }
 
 export function setPostReaction({ postId, userId, reactionType }) {

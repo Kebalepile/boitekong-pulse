@@ -2,6 +2,9 @@ const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
 const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
 export const MAX_AVATAR_FILE_BYTES = 1024 * 1024;
+export const MAX_POST_CONTENT_LENGTH = 1000;
+export const MAX_COMMENT_LENGTH = 300;
+export const MAX_REPORT_NOTE_LENGTH = 120;
 const ALLOWED_AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const COMMON_WEAK_PASSWORDS = new Set([
@@ -294,11 +297,29 @@ export function validatePostContent(value) {
     throw makeError("POST_CONTENT_REQUIRED", "content", "Post content is required.");
   }
 
-  if (normalized.length > 1000) {
+  if (normalized.length > MAX_POST_CONTENT_LENGTH) {
     throw makeError(
       "POST_CONTENT_TOO_LONG",
       "content",
-      "Post content must be 1000 characters or fewer."
+      `Post content must be ${MAX_POST_CONTENT_LENGTH} characters or fewer.`
+    );
+  }
+
+  return normalized;
+}
+
+export function validateCommentContent(value) {
+  const normalized = normalizePostContent(value);
+
+  if (!normalized) {
+    throw makeError("COMMENT_CONTENT_REQUIRED", "content", "Comment text is required.");
+  }
+
+  if (normalized.length > MAX_COMMENT_LENGTH) {
+    throw makeError(
+      "COMMENT_CONTENT_TOO_LONG",
+      "content",
+      `Comment text must be ${MAX_COMMENT_LENGTH} characters or fewer.`
     );
   }
 
@@ -323,6 +344,39 @@ export function validatePhoneNumber(value) {
   return normalized;
 }
 
+export function validateRequiredPhoneNumber(value) {
+  const normalized = validatePhoneNumber(value);
+
+  if (!normalized) {
+    throw makeError(
+      "PHONE_NUMBER_REQUIRED",
+      "phoneNumber",
+      "Phone number is required."
+    );
+  }
+
+  return normalized;
+}
+
+export function validatePostSubmission({ content = "", voiceNote = null }) {
+  const hasVoiceNote = Boolean(voiceNote?.dataUrl);
+  const normalizedContent = normalizePostContent(content || "");
+  const hasText = Boolean(normalizedContent);
+
+  if (!hasText && !hasVoiceNote) {
+    throw makeError(
+      "POST_BODY_REQUIRED",
+      "content",
+      "Add text or record a voice note."
+    );
+  }
+
+  return {
+    content: hasText ? validatePostContent(content) : "",
+    voiceNote: hasVoiceNote ? voiceNote : null
+  };
+}
+
 export function validateCommentSubmission({ content = "", voiceNote = null, mode = null }) {
   const hasVoiceNote = Boolean(voiceNote?.dataUrl);
   const normalizedContent = normalizePostContent(content || "");
@@ -345,7 +399,7 @@ export function validateCommentSubmission({ content = "", voiceNote = null, mode
 
   if (mode === "text") {
     return {
-      content: validatePostContent(content),
+      content: validateCommentContent(content),
       voiceNote: null
     };
   }
@@ -368,7 +422,7 @@ export function validateCommentSubmission({ content = "", voiceNote = null, mode
 
   return hasText
     ? {
-        content: validatePostContent(content),
+        content: validateCommentContent(content),
         voiceNote: null
       }
     : {

@@ -19,6 +19,9 @@ export function createUser({ username, location, passwordHash, phoneNumber = "" 
       extension: validateExtension(location.extension)
     },
     avatarDataUrl: "",
+    directMessagesEnabled: true,
+    notificationsEnabled: true,
+    blockedUserIds: [],
     followingUserIds: [],
     passwordHash,
     createdAt: new Date().toISOString()

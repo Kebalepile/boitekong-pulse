@@ -8,6 +8,7 @@ import {
   addCommentToPost,
   getPostById,
   getCommentsForPost,
+  getVisibleCommentsForPost,
   updateCommentInPost,
   deleteCommentFromPost
 } from "../services/postService.js";
@@ -15,11 +16,12 @@ import { navigate } from "../router.js";
 import { showToast } from "./toast.js";
 import { showConfirmDialog } from "./confirmDialog.js";
 import { showActionSheet } from "./actionSheet.js";
+import { showReportSheet } from "./reportSheet.js";
 import { showUserPreviewSheet } from "./userPreviewSheet.js";
-import { createCommentCard } from "./commentCard.js";
+import { createCommentCard, createVoiceNotePlayer } from "./commentCard.js";
 import { findUserById } from "../services/userService.js";
 import { buildCommentTree } from "../utils/commentTree.js";
-import { validateCommentSubmission } from "../utils/validators.js";
+import { MAX_COMMENT_LENGTH, validateCommentSubmission } from "../utils/validators.js";
 import {
   getVoiceNoteFeatureStatus,
   startVoiceNoteRecording,
@@ -36,21 +38,25 @@ import {
 import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
 import { createAvatarElement } from "../utils/avatar.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
+import {
+  COMMENT_BATCH_SIZE,
+  REPLY_BATCH_SIZE,
+  createLoadMoreControl
+} from "../utils/listBatching.js";
 
 const POST_PREVIEW_LENGTH = 300;
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
 const voiceNoteChoiceText = voiceNoteFeatureStatus.supported ? "" : voiceNoteFeatureStatus.message;
 
 const commentUiState = {
-  openPanels: new Set(),
   openCommentForms: new Set(),
   openReplyForms: new Set(),
   openReplyLists: new Set(),
   openEditForms: new Set(),
   sortOrders: new Map(),
-  panelEntries: new Map(),
-  activeSheetPostId: null,
-  activeSheetContext: null
+  visibleCommentCounts: new Map(),
+  visibleReplyCounts: new Map(),
+  activeSheetPostId: null
 };
 
 export function createPostCard(post, author, currentUserId, onReactionChange) {
@@ -185,8 +191,23 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
   return card;
 }
 
+export function openCommentsSheetForPost({
+  postId,
+  currentUserId,
+  onPostChange,
+  focusCommentId = null
+}) {
+  openCommentsSheet({
+    postId,
+    currentUserId,
+    onPostChange,
+    focusCommentId
+  });
+}
+
 function createPostMenuButton(post, author, currentUserId, onReactionChange) {
   const isOwner = post.userId === currentUserId;
+  const canEditPost = isOwner && !(post.voiceNote?.dataUrl && !post.content);
   const menuBtn = createElement("button", {
     className: "post-menu-btn",
     type: "button",
@@ -208,17 +229,30 @@ function createPostMenuButton(post, author, currentUserId, onReactionChange) {
         {
           label: "Report",
           onSelect: () => {
-            showToast("Report flow coming soon.", "success");
+            showReportSheet({
+              reporterUserId: currentUserId,
+              targetType: "post",
+              targetId: post.id,
+              onSubmitted: ({ hideForReporter = false }) => {
+                if (hideForReporter && typeof onReactionChange === "function") {
+                  onReactionChange();
+                }
+              }
+            });
           }
         },
-        ...(isOwner
+        ...(canEditPost
           ? [
               {
                 label: "Edit",
                 onSelect: () => {
                   navigate("edit-post", { postId: post.id });
                 }
-              },
+              }
+            ]
+          : []),
+        ...(isOwner
+          ? [
               {
                 label: "Delete",
                 danger: true,
@@ -274,9 +308,11 @@ function createMoreIcon() {
   return svg;
 }
 
-async function sharePostEntry(post, author) {
+  async function sharePostEntry(post, author) {
   const authorName = author?.username || "Unknown User";
-  const shareText = `${authorName}: ${post.content}`;
+  const shareText = post.content
+    ? `${authorName}: ${post.content}`
+    : `${authorName} shared a voice note on Boitekong Pulse.`;
 
   try {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
@@ -442,11 +478,11 @@ function createCommentsSection(post, currentUserId, onPostChange) {
   const section = createElement("section", {
     className: "comments-section comments-section-launcher"
   });
-  const comments = getCommentsForPost(post.id);
+  const comments = getVisibleCommentsForPost(post.id, currentUserId);
   const toggleBtn = createElement("button", {
     className: "comment-toggle-btn",
     type: "button",
-    text: getCommentsToggleLabel(true, comments.length)
+    text: getCommentsToggleLabel(comments.length)
   });
 
   toggleBtn.addEventListener("click", () => {
@@ -461,19 +497,29 @@ function createCommentsSection(post, currentUserId, onPostChange) {
   return section;
 }
 
-function createCommentsSheetContent(post, currentUserId, onPostChange) {
+function createCommentsSheetContent(
+  post,
+  currentUserId,
+  onPostChange,
+  focusCommentId = null
+) {
   const section = createElement("section", {
     className: "comments-section comments-section-sheet"
   });
-  const comments = getCommentsForPost(post.id);
+  const comments = getVisibleCommentsForPost(post.id, currentUserId);
   const currentUser = findUserById(currentUserId);
   const sortOrder = commentUiState.sortOrders.get(post.id) || "newest";
   const commentTree = buildCommentTree(comments, sortOrder);
+  ensureCommentVisibility({
+    postId: post.id,
+    commentTree,
+    focusCommentId
+  });
   const commentFormIsOpen = commentUiState.openCommentForms.has(post.id);
   const header = createElement("div", { className: "comments-header" });
   const title = createElement("h3", {
     className: "comments-sheet-title",
-    text: getCommentsToggleLabel(true, comments.length)
+    text: getCommentsToggleLabel(comments.length)
   });
   const controls = createElement("div", { className: "comments-header-controls" });
   const handleCommentsChange = (options = {}) => {
@@ -481,16 +527,21 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
       onPostChange(options);
     }
 
-    if (commentUiState.activeSheetPostId === post.id) {
-      window.requestAnimationFrame(() => {
-        openCommentsSheet({
-          postId: post.id,
-          currentUserId,
-          onPostChange,
-          focusCommentId: options?.focusCommentId || null
-        });
-      });
+    rerenderCommentsSheet(options);
+  };
+  const rerenderCommentsSheet = (options = {}) => {
+    if (commentUiState.activeSheetPostId !== post.id) {
+      return;
     }
+
+    window.requestAnimationFrame(() => {
+      openCommentsSheet({
+        postId: post.id,
+        currentUserId,
+        onPostChange,
+        focusCommentId: options?.focusCommentId || null
+      });
+    });
   };
   const sortLabel =
     comments.length > 0
@@ -499,7 +550,7 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
           sortOrder,
           onSortChange: (nextSortOrder) => {
             commentUiState.sortOrders.set(post.id, nextSortOrder);
-            handleCommentsChange();
+            rerenderCommentsSheet();
           }
         })
       : null;
@@ -552,7 +603,6 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
         voiceNote
       }),
     onSuccess: () => {
-      commentUiState.openPanels.add(post.id);
       commentUiState.openCommentForms.delete(post.id);
       handleCommentsChange();
     }
@@ -561,6 +611,8 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
   composerActions.append(composerAvatar, composerToggleBtn);
 
   const commentsList = createElement("div", { className: "comments-list" });
+  const visibleCommentCount =
+    commentUiState.visibleCommentCounts.get(post.id) || COMMENT_BATCH_SIZE;
 
   if (commentTree.length === 0) {
     commentsList.appendChild(
@@ -570,7 +622,9 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
       })
     );
   } else {
-    commentTree.forEach((commentNode) => {
+    const visibleCommentNodes = commentTree.slice(0, visibleCommentCount);
+
+    visibleCommentNodes.forEach((commentNode) => {
       commentsList.appendChild(
         createCommentNode({
           postId: post.id,
@@ -578,10 +632,27 @@ function createCommentsSheetContent(post, currentUserId, onPostChange) {
           node: commentNode,
           currentUserId,
           onCommentChange: handleCommentsChange,
+          onCommentRerender: rerenderCommentsSheet,
           depth: 0
         })
       );
     });
+
+    if (commentTree.length > visibleCommentNodes.length) {
+      commentsList.appendChild(
+        createLoadMoreControl({
+          label: "See more comments",
+          className: "comments-load-more-row",
+          onClick: () => {
+            commentUiState.visibleCommentCounts.set(
+              post.id,
+              visibleCommentCount + COMMENT_BATCH_SIZE
+            );
+            rerenderCommentsSheet();
+          }
+        })
+      );
+    }
   }
 
   composerToggleBtn.addEventListener("click", () => {
@@ -797,13 +868,10 @@ function openCommentsSheet({ postId, currentUserId, onPostChange, focusCommentId
 
   document.body.classList.add("comments-sheet-open");
   commentUiState.activeSheetPostId = postId;
-  commentUiState.activeSheetContext = {
-    postId,
-    currentUserId,
-    onPostChange
-  };
 
-  body.replaceChildren(createCommentsSheetContent(post, currentUserId, onPostChange));
+  body.replaceChildren(
+    createCommentsSheetContent(post, currentUserId, onPostChange, focusCommentId)
+  );
 
   const nextPanel = body.querySelector(".comments-panel");
 
@@ -825,7 +893,6 @@ function closeCommentsSheet() {
 
   if (!root) {
     commentUiState.activeSheetPostId = null;
-    commentUiState.activeSheetContext = null;
     return;
   }
 
@@ -835,7 +902,6 @@ function closeCommentsSheet() {
 
   root.remove();
   commentUiState.activeSheetPostId = null;
-  commentUiState.activeSheetContext = null;
 }
 
 function createCommentsCloseIcon() {
@@ -862,6 +928,7 @@ function createCommentNode({
   node,
   currentUserId,
   onCommentChange,
+  onCommentRerender = null,
   depth,
   parentAuthorName = ""
 }) {
@@ -960,7 +1027,11 @@ function createCommentNode({
   setToggleDisplay(repliesList, repliesListIsOpen);
 
   if (node.children.length > 0) {
-    node.children.forEach((childNode) => {
+    const visibleReplyCount =
+      commentUiState.visibleReplyCounts.get(node.id) || REPLY_BATCH_SIZE;
+    const visibleReplies = node.children.slice(0, visibleReplyCount);
+
+    visibleReplies.forEach((childNode) => {
       repliesList.appendChild(
         createCommentNode({
           postId,
@@ -968,11 +1039,31 @@ function createCommentNode({
           node: childNode,
           currentUserId,
           onCommentChange,
+          onCommentRerender,
           depth: depth + 1,
           parentAuthorName: author?.username || ""
         })
       );
     });
+
+    if (node.children.length > visibleReplies.length) {
+      repliesList.appendChild(
+        createLoadMoreControl({
+          label: "See more replies",
+          className: "comment-load-more-row",
+          onClick: () => {
+            commentUiState.visibleReplyCounts.set(
+              node.id,
+              visibleReplyCount + REPLY_BATCH_SIZE
+            );
+            commentUiState.openReplyLists.add(node.id);
+            if (typeof onCommentRerender === "function") {
+              onCommentRerender();
+            }
+          }
+        })
+      );
+    }
   }
 
   let reactionBar = null;
@@ -1055,6 +1146,7 @@ function createCommentNode({
       openCommentActionSheet({
         comment: node,
         author,
+        currentUserId,
         isOwner,
         canEditComment,
         onEdit:
@@ -1104,7 +1196,12 @@ function createCommentNode({
                 }
               });
             }
-          : null
+          : null,
+        onReportSubmitted: ({ hideForReporter = false }) => {
+          if (hideForReporter && typeof onCommentChange === "function") {
+            onCommentChange();
+          }
+        }
       })
   });
 
@@ -1149,7 +1246,7 @@ function createCommentForm({
   textarea.className = `form-input comment-textarea${compact ? " comment-textarea-reply" : ""}`;
   textarea.placeholder = placeholder;
   textarea.required = true;
-  textarea.maxLength = 1000;
+  textarea.maxLength = MAX_COMMENT_LENGTH;
   textarea.id = inputId;
   textarea.value = initialValue;
   const textModeFields = createElement("div", { className: "comment-input-mode-panel" });
@@ -1342,10 +1439,9 @@ function createCommentForm({
 
     const progressRatio =
       voiceNoteDraft?.durationMs && voiceNoteAudio
-        ? Math.min(
-            (voiceNoteAudio.currentTime * 1000) / voiceNoteDraft.durationMs,
-            1
-          )
+        ? voiceNoteAudio.ended
+          ? 1
+          : Math.min((voiceNoteAudio.currentTime * 1000) / voiceNoteDraft.durationMs, 1)
         : 0;
 
     voiceNoteVisualizer.renderStoredWaveform({
@@ -1468,14 +1564,15 @@ function createCommentForm({
 
   if (hasVoiceMode) {
     voiceNoteComposer = createElement("div", {
-      className: "voice-note-composer"
+      className: "voice-note-composer messages-voice-note-composer comment-voice-note-composer"
     });
     voiceNoteShell = createElement("div", {
       className: "voice-note-shell"
     });
 
     voiceNotePrimaryBtn = createElement("button", {
-      className: "voice-note-btn voice-note-icon-btn voice-note-main-btn",
+      className:
+        "voice-note-btn voice-note-icon-btn voice-note-main-btn messages-voice-trigger-btn comment-voice-main-btn",
       type: "button",
       text: "\u{1F3A4}",
       attributes: {
@@ -1488,7 +1585,7 @@ function createCommentForm({
       className: "voice-note-timer"
     });
     voiceNoteSpeedBtn = createElement("button", {
-      className: "voice-note-speed-btn",
+      className: "voice-note-speed-btn messages-voice-speed-btn comment-voice-speed-btn",
       type: "button",
       text: formatVoiceNotePlaybackRate(voiceNotePlaybackRate),
       attributes: {
@@ -1497,16 +1594,17 @@ function createCommentForm({
       }
     });
     voiceNoteMeter = createElement("div", {
-      className: "voice-note-bubble voice-note-bubble-draft voice-note-meter voice-note-meter-seekable"
+      className:
+        "voice-note-bubble voice-note-bubble-draft voice-note-meter voice-note-meter-seekable messages-voice-panel comment-voice-panel"
     });
     voiceNoteWaveform = createElement("div", {
-      className: "voice-note-waveform"
+      className: "voice-note-waveform messages-voice-waveform"
     });
     voiceNoteProgressLine = createElement("span", {
       className: "voice-note-progress-line"
     });
     const voiceNoteMeta = createElement("div", {
-      className: "voice-note-meta"
+      className: "voice-note-meta comment-voice-meta"
     });
     voiceNoteStateDot = createElement("span", {
       className: "voice-note-state-dot",
@@ -1786,6 +1884,7 @@ function clearCommentUiState(node) {
   commentUiState.openReplyForms.delete(node.id);
   commentUiState.openReplyLists.delete(node.id);
   commentUiState.openEditForms.delete(node.id);
+  commentUiState.visibleReplyCounts.delete(node.id);
 
   node.children.forEach((childNode) => {
     clearCommentUiState(childNode);
@@ -1795,10 +1894,12 @@ function clearCommentUiState(node) {
 function openCommentActionSheet({
   comment,
   author,
+  currentUserId,
   isOwner,
   canEditComment,
   onEdit,
-  onDelete
+  onDelete,
+  onReportSubmitted = null
 }) {
   showActionSheet({
     title: "Comment",
@@ -1810,7 +1911,12 @@ function openCommentActionSheet({
       {
         label: "Report",
         onSelect: () => {
-          showToast("Report flow coming soon.", "success");
+          showReportSheet({
+            reporterUserId: currentUserId,
+            targetType: "comment",
+            targetId: comment.id,
+            onSubmitted: onReportSubmitted
+          });
         }
       },
       ...(isOwner && canEditComment && typeof onEdit === "function"
@@ -1838,7 +1944,7 @@ async function shareCommentEntry(comment, author) {
   const authorName = author?.username || "Unknown User";
   const shareText = comment?.content
     ? `${authorName}: ${comment.content}`
-    : `${authorName} shared a voice note on Boitekong Now.`;
+    : `${authorName} shared a voice note on Boitekong Pulse.`;
 
   try {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
@@ -1908,21 +2014,6 @@ function focusCommentForm(form) {
   });
 }
 
-function focusCommentsPanel(panel) {
-  if (!panel) {
-    return;
-  }
-
-  panel.scrollIntoView({
-    behavior: "smooth",
-    block: "start"
-  });
-
-  window.requestAnimationFrame(() => {
-    panel.focus({ preventScroll: true });
-  });
-}
-
 function focusCommentById(postId, commentId) {
   if (!postId || !commentId) {
     return;
@@ -1968,47 +2059,64 @@ function focusCommentInSheet(commentId) {
   });
 }
 
-function closeOtherCommentsPanels(currentPostId) {
-  for (const [postId, entry] of commentUiState.panelEntries.entries()) {
-    if (!entry?.panel?.isConnected) {
-      commentUiState.panelEntries.delete(postId);
-      continue;
-    }
-
-    if (postId === currentPostId) {
-      continue;
-    }
-
-    closeCommentsPanel(postId);
-  }
-}
-
-function closeCommentsPanel(postId) {
-  const entry = commentUiState.panelEntries.get(postId);
-
-  commentUiState.openPanels.delete(postId);
-  commentUiState.openCommentForms.delete(postId);
-
-  if (!entry || !entry.panel?.isConnected) {
-    commentUiState.panelEntries.delete(postId);
+function ensureCommentVisibility({ postId, commentTree, focusCommentId }) {
+  if (!postId || !focusCommentId) {
     return;
   }
 
-  setToggleDisplay(entry.panel, false);
-  entry.toggleBtn.classList.remove("comment-toggle-btn-active");
-  entry.toggleBtn.textContent = getCommentsToggleLabel(
-    false,
-    typeof entry.getCommentsCount === "function" ? entry.getCommentsCount() : 0
-  );
+  const commentPath = findCommentPath(commentTree, focusCommentId);
 
-  if (entry.topLevelForm) {
-    resetCommentForm(entry.topLevelForm);
-    setToggleDisplay(entry.topLevelForm, false);
+  if (!commentPath || commentPath.length === 0) {
+    return;
   }
 
-  if (entry.composerToggleBtn) {
-    entry.composerToggleBtn.textContent = "Add a comment...";
+  const topLevelIndex = commentTree.findIndex((node) => node.id === commentPath[0].id);
+
+  if (topLevelIndex >= 0) {
+    commentUiState.visibleCommentCounts.set(
+      postId,
+      Math.max(
+        commentUiState.visibleCommentCounts.get(postId) || COMMENT_BATCH_SIZE,
+        topLevelIndex + 1
+      )
+    );
   }
+
+  for (let index = 0; index < commentPath.length - 1; index += 1) {
+    const currentNode = commentPath[index];
+    const nextNode = commentPath[index + 1];
+    const childIndex = currentNode.children.findIndex((childNode) => childNode.id === nextNode.id);
+
+    commentUiState.openReplyLists.add(currentNode.id);
+
+    if (childIndex >= 0) {
+      commentUiState.visibleReplyCounts.set(
+        currentNode.id,
+        Math.max(
+          commentUiState.visibleReplyCounts.get(currentNode.id) || REPLY_BATCH_SIZE,
+          childIndex + 1
+        )
+      );
+    }
+  }
+}
+
+function findCommentPath(nodes, targetCommentId, trail = []) {
+  for (const node of nodes) {
+    const nextTrail = [...trail, node];
+
+    if (node.id === targetCommentId) {
+      return nextTrail;
+    }
+
+    const childTrail = findCommentPath(node.children, targetCommentId, nextTrail);
+
+    if (childTrail) {
+      return childTrail;
+    }
+  }
+
+  return null;
 }
 
 function findLatestReplyForParent(comments, parentId, userId) {
@@ -2039,10 +2147,16 @@ function createPostContent(post) {
     content.textContent = `${fullText.slice(0, POST_PREVIEW_LENGTH).trimEnd()}...`;
   };
 
-  renderContent();
-  wrapper.appendChild(content);
+  if (fullText) {
+    renderContent();
+    wrapper.appendChild(content);
+  }
 
-  if (!isLongPost) {
+  if (post.voiceNote?.dataUrl) {
+    wrapper.appendChild(createVoiceNotePlayer(post.voiceNote));
+  }
+
+  if (!fullText || !isLongPost) {
     return wrapper;
   }
 
@@ -2062,7 +2176,7 @@ function createPostContent(post) {
   return wrapper;
 }
 
-function getCommentsToggleLabel(isOpen, count) {
+function getCommentsToggleLabel(count) {
   const safeCount = Number.isFinite(count) ? count : 0;
   return `${formatCompactCount(safeCount)} ${safeCount === 1 ? "Comment" : "Comments"}`;
 }

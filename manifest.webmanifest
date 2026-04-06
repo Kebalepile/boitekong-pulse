@@ -1,5 +1,5 @@
 {
-  "name": "Boitekong Now",
+  "name": "Boitekong Pulse",
   "short_name": "Boitekong",
   "description": "A mobile-first township community app for local posts, replies, and voice-note conversations.",
   "start_url": ".",
@@ -8,9 +8,9 @@
   "theme_color": "#1d4ed8",
   "icons": [
     {
-      "src": "assets/app-icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "assets/app-icon.png",
+      "sizes": "1536x1024",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

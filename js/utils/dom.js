@@ -58,6 +58,21 @@ export function clearFormErrors(form) {
   invalidInputs.forEach((input) => {
     input.classList.remove("input-error");
   });
+
+  const invalidShells = form.querySelectorAll(".auth-floating-field-invalid");
+  invalidShells.forEach((shell) => {
+    shell.classList.remove("auth-floating-field-invalid");
+  });
+
+  const invalidCheckboxShells = form.querySelectorAll(".auth-checkbox-field-invalid");
+  invalidCheckboxShells.forEach((shell) => {
+    shell.classList.remove("auth-checkbox-field-invalid");
+  });
+
+  const emptyInputs = form.querySelectorAll(".auth-empty-error");
+  emptyInputs.forEach((input) => {
+    input.classList.remove("auth-empty-error");
+  });
 }
 
 export function setFieldError(inputId, message) {
@@ -66,6 +81,7 @@ export function setFieldError(inputId, message) {
 
   if (input) {
     input.classList.add("input-error");
+    input.closest(".auth-floating-field")?.classList.add("auth-floating-field-invalid");
   }
 
   if (error) {

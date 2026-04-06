@@ -1,5 +1,6 @@
 import {
   createAndStoreUser,
+  findUserByPhoneNumber,
   findUserByUsername,
   getCurrentUser,
   setCurrentUser,
@@ -11,6 +12,7 @@ import {
   validateTownship,
   validateExtension,
   validatePhoneNumber,
+  validateRequiredPhoneNumber,
   validatePasswordConfirmation,
   validatePassword,
   validateCurrentPassword
@@ -33,7 +35,7 @@ export async function registerUser({
   confirmPassword
 }) {
   const safeUsername = validateUsername(username);
-  const safePhoneNumber = validatePhoneNumber(phoneNumber);
+  const safePhoneNumber = validateRequiredPhoneNumber(phoneNumber);
   const safeTownship = validateTownship(township);
   const safeExtension = validateExtension(extension);
   const safePassword = validatePasswordConfirmation(password, confirmPassword);
@@ -53,15 +55,46 @@ export async function registerUser({
   return user;
 }
 
-export async function loginUser({ username, password }) {
-  const safeUsername = validateUsername(username);
+function resolveLoginUser(identifier) {
+  const safeIdentifier = typeof identifier === "string" ? identifier.trim() : "";
+  let user = null;
+
+  try {
+    const safeUsername = validateUsername(safeIdentifier);
+    user = findUserByUsername(safeUsername);
+  } catch {
+    user = null;
+  }
+
+  if (user) {
+    return user;
+  }
+
+  try {
+    const safePhoneNumber = validateRequiredPhoneNumber(safeIdentifier);
+    return findUserByPhoneNumber(safePhoneNumber);
+  } catch {
+    return null;
+  }
+}
+
+export async function loginUser({ identifier, password }) {
+  const safeIdentifier = typeof identifier === "string" ? identifier.trim() : "";
   const safePassword = validatePassword(password);
   const passwordHash = await hashPassword(safePassword);
 
-  const user = findUserByUsername(safeUsername);
+  if (!safeIdentifier) {
+    throw makeError(
+      "LOGIN_IDENTIFIER_REQUIRED",
+      "identifier",
+      "Enter your username or phone number."
+    );
+  }
+
+  const user = resolveLoginUser(safeIdentifier);
 
   if (!user) {
-    throw makeError("USER_NOT_FOUND", "username", "User not found.");
+    throw makeError("USER_NOT_FOUND", "identifier", "Account not found.");
   }
 
   if (user.passwordHash !== passwordHash) {

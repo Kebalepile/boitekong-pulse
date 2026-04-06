@@ -79,11 +79,19 @@ export function renderProfile(app, currentUser, payload = null) {
     text: "Add post",
     type: "button"
   });
+  const inviteBtn = createElement("button", {
+    className: "secondary-btn profile-channel-btn",
+    text: "Invite",
+    type: "button"
+  });
   editProfileBtn.addEventListener("click", () => {
     navigate("profile", { editMode: true });
   });
   addPostBtn.addEventListener("click", () => navigate("create-post"));
-  actionRow.append(editProfileBtn, addPostBtn);
+  inviteBtn.addEventListener("click", async () => {
+    await shareAppInvite(currentUser);
+  });
+  actionRow.append(editProfileBtn, addPostBtn, inviteBtn);
 
   const tabs = createElement("div", { className: "profile-channel-tabs" });
   tabs.append(
@@ -277,19 +285,65 @@ function renderAvatarPreview(container, userLike) {
   );
 }
 
-function createInfoChip(label, value) {
-  const chip = createElement("div", { className: "profile-info-chip" });
-  const chipLabel = createElement("span", {
-    className: "profile-info-chip-label",
-    text: label
-  });
-  const chipValue = createElement("strong", {
-    className: "profile-info-chip-value",
-    text: value
-  });
+async function shareAppInvite(currentUser) {
+  const username = currentUser?.username ? `@${currentUser.username}` : "me";
+  const township = currentUser?.location?.township?.trim?.() || "";
+  const extension = currentUser?.location?.extension?.trim?.() || "";
+  const locationText = [township, extension].filter(Boolean).join(" ");
+  const appUrl = getShareableAppUrl();
+  const shareText = [
+    `Hi, I'm using Boitekong Pulse as ${username}.`,
+    `Join me on the app for local updates, posts, replies, and voice notes${locationText ? ` around ${locationText}` : ""}.`
+  ].join(" ");
 
-  chip.append(chipLabel, chipValue);
-  return chip;
+  try {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      const shareData = {
+        title: "Join me on Boitekong Pulse",
+        text: shareText
+      };
+
+      if (appUrl) {
+        shareData.url = appUrl;
+      }
+
+      await navigator.share(shareData);
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      const clipboardText = appUrl ? `${shareText}\n${appUrl}` : shareText;
+      await navigator.clipboard.writeText(clipboardText);
+      showToast("Invite copied to clipboard.", "success");
+      return;
+    }
+
+    throw new Error("Sharing is not available on this device.");
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return;
+    }
+
+    showToast(error.message || "Could not share invite.", "error");
+  }
+}
+
+function getShareableAppUrl() {
+  if (typeof window === "undefined" || !window.location) {
+    return "";
+  }
+
+  const { protocol, hostname, origin } = window.location;
+
+  if (!origin || protocol === "file:") {
+    return "";
+  }
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return "";
+  }
+
+  return origin;
 }
 
 function createChannelTab(label, options = {}) {

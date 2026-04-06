@@ -1,13 +1,91 @@
-import { createElement } from "../utils/dom.js";
+import { clearElement, createElement } from "../utils/dom.js";
 import { navigate, handleLogout } from "../router.js";
 import { createBrandMark } from "./brandMark.js";
 import { createAvatarElement } from "../utils/avatar.js";
+import { showUserPreviewSheet } from "./userPreviewSheet.js";
+import { showToast } from "./toast.js";
+import { getUnreadConversationCount } from "../services/messageService.js";
+import { formatCompactCount } from "../utils/numberFormat.js";
+import {
+  clearConversationNotifications,
+  clearNotificationsForUser,
+  ensureBrowserNotificationPermission,
+  getBrowserNotificationPermissionStatus,
+  getNotificationsForUser,
+  getUnreadNotificationCount,
+  registerNotificationOpenHandler,
+  removeNotification
+} from "../services/notificationService.js";
+import { findUserById, setNotificationsEnabled } from "../services/userService.js";
+import {
+  NOTIFICATION_BATCH_SIZE,
+  createLoadMoreControl
+} from "../utils/listBatching.js";
+
+let deferredInstallPrompt = null;
+let installPromptBound = false;
+
+function isStandaloneApp() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return (
+    window.matchMedia?.("(display-mode: standalone)").matches ||
+    window.navigator?.standalone === true
+  );
+}
+
+function bindInstallPrompt() {
+  if (typeof window === "undefined" || installPromptBound) {
+    return;
+  }
+
+  installPromptBound = true;
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+  });
+
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+  });
+}
+
+function canInstallApp() {
+  return !isStandaloneApp() && Boolean(deferredInstallPrompt);
+}
+
+async function promptInstallApp() {
+  if (!deferredInstallPrompt) {
+    return false;
+  }
+
+  const installPrompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+
+  try {
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+  } catch {
+    return false;
+  }
+
+  return true;
+}
 
 export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
+  bindInstallPrompt();
   const initialSearchQuery =
     typeof options.initialSearchQuery === "string" ? options.initialSearchQuery : "";
   const initialSearchMode = options.initialSearchMode === "users" ? "users" : "posts";
   const searchModeOnLoad = Boolean(options.searchMode || activeRoute === "search");
+  const unreadConversationCount = getUnreadConversationCount(currentUser.id);
+  const messagesMenuLabel =
+    unreadConversationCount > 0
+      ? `Messages (${formatCompactCount(unreadConversationCount)})`
+      : "Messages";
 
   const header = createElement("header", { className: "topbar" });
   const topRow = createElement("div", { className: "topbar-row" });
@@ -52,16 +130,48 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   createBtn.addEventListener("click", () => navigate("create-post"));
 
   const notificationsBtn = createElement("button", {
-    className: "secondary-btn topbar-utility-btn topbar-utility-btn-disabled",
+    className: "secondary-btn topbar-utility-btn",
     type: "button",
     attributes: {
-      disabled: "true",
-      "aria-disabled": "true",
-      "aria-label": "Notifications coming soon",
-      title: "Notifications coming soon"
+      "aria-label": "Notifications",
+      title: "Notifications"
     }
   });
   notificationsBtn.append(createNavButtonContent("notifications", "Notifications"));
+
+  const syncNotificationsButton = () => {
+    const unreadNotificationCount = getUnreadNotificationCount(currentUser.id);
+    notificationsBtn.classList.toggle(
+      "topbar-utility-btn-active",
+      unreadNotificationCount > 0
+    );
+    notificationsBtn.setAttribute(
+      "aria-label",
+      unreadNotificationCount > 0
+        ? `${formatCompactCount(unreadNotificationCount)} unread notifications`
+        : "Notifications"
+    );
+
+    const existingBadge = notificationsBtn.querySelector(".topbar-notifications-badge");
+
+    if (unreadNotificationCount > 0) {
+      if (existingBadge) {
+        existingBadge.textContent = formatCompactCount(unreadNotificationCount);
+      } else {
+        notificationsBtn.appendChild(
+          createElement("span", {
+            className: "topbar-notifications-badge",
+            text: formatCompactCount(unreadNotificationCount)
+          })
+        );
+      }
+      return;
+    }
+
+    existingBadge?.remove();
+  };
+
+  syncNotificationsButton();
 
   const profileBtn = createElement("button", {
     className:
@@ -235,16 +345,33 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
 
   const drawerController = createTopbarDrawer({
     currentUser,
+    messagesMenuLabel,
     onNavigate: (route, payload = null) => navigate(route, payload),
     onLogout: handleLogout
   });
+  const notificationsMenuController = createNotificationsMenu({
+    currentUser,
+    onNavigate: (route, payload = null) => navigate(route, payload),
+    onNotificationsChange: syncNotificationsButton
+  });
   const accountMenuController = createAccountMenu({
     currentUser,
+    messagesMenuLabel,
     onNavigate: (route, payload = null) => navigate(route, payload),
     onLogout: handleLogout
   });
 
   let searchMode = false;
+
+  registerNotificationOpenHandler((notification) => {
+    handleNotificationSelection({
+      notification,
+      currentUserId: currentUser.id,
+      onNavigate: (route, payload = null) => navigate(route, payload),
+      onNotificationsChange: syncNotificationsButton,
+      close: () => {}
+    });
+  });
 
   const openSearchMode = () => {
     searchMode = true;
@@ -284,6 +411,7 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   };
 
   menuBtn.addEventListener("click", drawerController.open);
+  notificationsBtn.addEventListener("click", notificationsMenuController.open);
   profileBtn.addEventListener("click", accountMenuController.open);
   searchBtn.addEventListener("click", openSearchMode);
   searchBackBtn.addEventListener("click", closeSearchMode);
@@ -307,7 +435,7 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   return header;
 }
 
-function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
+function createTopbarDrawer({ currentUser, messagesMenuLabel, onNavigate, onLogout }) {
   let root = null;
   let closeTimerId = null;
 
@@ -333,31 +461,6 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
     const header = createElement("div", { className: "topbar-drawer-header" });
     header.append(createBrandMark({ compact: true, showTagline: false }));
 
-    const userRow = createElement("button", {
-      className: "topbar-drawer-user",
-      type: "button"
-    });
-    const avatar = createAvatarElement(currentUser, {
-      size: "md",
-      className: "topbar-drawer-avatar",
-      decorative: true
-    });
-    const userCopy = createElement("div", { className: "topbar-drawer-user-copy" });
-    const username = createElement("strong", {
-      className: "topbar-drawer-username",
-      text: currentUser.username
-    });
-    const location = createElement("span", {
-      className: "topbar-drawer-location",
-      text: `${currentUser.location.township} ${currentUser.location.extension}`
-    });
-    userCopy.append(username, location);
-    userRow.append(avatar, userCopy);
-    userRow.addEventListener("click", () => {
-      close();
-      onNavigate("feed");
-    });
-
     const navSection = createElement("div", { className: "topbar-drawer-section" });
     navSection.append(
       createDrawerItem({
@@ -380,6 +483,11 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
     accountSection.append(
       accountTitle,
       createDrawerItem({
+        iconName: "messages",
+        label: messagesMenuLabel,
+        onSelect: () => onNavigate("messages")
+      }),
+      createDrawerItem({
         iconName: "logout",
         label: "Logout",
         danger: true,
@@ -396,8 +504,20 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
     });
     const aboutCopy = createElement("p", {
       className: "topbar-drawer-about-copy",
-      text: "Boitekong Now is a mobile-first township community feed for local posts, replies, and voice-note conversations."
+      text: "Boitekong Pulse is a mobile-first township community feed for local posts, replies, and voice-note conversations."
     });
+    const installItem = createDrawerItem({
+      iconName: "install",
+      label: "Install app",
+      onSelect: async () => {
+        const didPrompt = await promptInstallApp();
+
+        if (!didPrompt) {
+          showToast("Install is not available on this device yet.", "error");
+        }
+      }
+    });
+    installItem.hidden = !canInstallApp();
     const contactTitle = createElement("p", {
       className: "topbar-drawer-section-title",
       text: "Contact us"
@@ -416,13 +536,13 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
     });
     const copyright = createElement("p", {
       className: "topbar-drawer-copyright",
-      text: "Copyright 2025 Boitekong Now. All rights reserved."
+      text: "Copyright 2025 Boitekong Pulse. All rights reserved."
     });
 
     contactList.append(emailRow, githubRow, phoneRow);
-    infoSection.append(aboutTitle, aboutCopy, contactTitle, contactList, copyright);
+    infoSection.append(aboutTitle, aboutCopy, installItem, contactTitle, contactList, copyright);
 
-    panel.append(header, userRow, navSection, accountSection, infoSection);
+    panel.append(header, navSection, accountSection, infoSection);
     root.append(overlay, panel);
 
     overlay.addEventListener("click", close);
@@ -438,6 +558,12 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
 
   const open = () => {
     const drawer = ensureRoot();
+    const installItem = drawer.querySelector(".topbar-drawer-item-install");
+
+    if (installItem) {
+      installItem.hidden = !canInstallApp();
+    }
+
     if (!drawer.isConnected) {
       document.body.appendChild(drawer);
       window.requestAnimationFrame(() => {
@@ -462,7 +588,334 @@ function createTopbarDrawer({ currentUser, onNavigate, onLogout }) {
   return { open, close };
 }
 
-function createAccountMenu({ currentUser, onNavigate, onLogout }) {
+function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChange = null }) {
+  let root = null;
+  let closeTimerId = null;
+  let permissionHelper = null;
+  let visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+
+  const updatePermissionHelper = () => {
+    if (!permissionHelper) {
+      return;
+    }
+
+    const status = getBrowserNotificationPermissionStatus();
+    const notificationsEnabled = currentUser.notificationsEnabled !== false;
+
+    if (!notificationsEnabled || status.permission === "granted") {
+      permissionHelper.textContent = "";
+      permissionHelper.style.display = "none";
+      return;
+    }
+
+    if (!status.supported) {
+      permissionHelper.textContent = "Browser notifications are not supported on this device.";
+      permissionHelper.style.display = "";
+      return;
+    }
+
+    if (status.permission === "denied") {
+      permissionHelper.textContent =
+        "Browser notifications are blocked in your browser settings.";
+      permissionHelper.style.display = "";
+      return;
+    }
+
+    permissionHelper.textContent =
+      "Allow browser notifications to get desktop alerts outside the bell.";
+    permissionHelper.style.display = "";
+  };
+
+  const ensureRoot = () => {
+    if (root?.isConnected) {
+      return root;
+    }
+
+    root = createElement("div", { className: "topbar-notifications-root" });
+    const overlay = createElement("button", {
+      className: "topbar-notifications-overlay",
+      type: "button",
+      attributes: {
+        "aria-label": "Close notifications"
+      }
+    });
+    const panel = createElement("section", {
+      className: "topbar-notifications-panel",
+      attributes: {
+        role: "dialog",
+        "aria-modal": "true",
+        "aria-label": "Notifications"
+      }
+    });
+    const header = createElement("div", { className: "topbar-notifications-header" });
+    const title = createElement("strong", {
+      className: "topbar-notifications-title",
+      text: "Notifications"
+    });
+    const notificationsToggle = createNotificationsToggle({
+      checked: currentUser.notificationsEnabled !== false,
+      onChange: async (enabled) => {
+        setNotificationsEnabled({
+          userId: currentUser.id,
+          enabled
+        });
+        currentUser.notificationsEnabled = enabled;
+
+        if (enabled) {
+          await ensureBrowserNotificationPermission();
+        }
+
+        updatePermissionHelper();
+      }
+    });
+    const markAllBtn = createElement("button", {
+      className: "topbar-notifications-mark-all",
+      type: "button",
+      text: "Mark all as read"
+    });
+    permissionHelper = createElement("p", {
+      className: "topbar-notifications-helper"
+    });
+    const list = createElement("div", { className: "topbar-notifications-list" });
+    const renderList = () => {
+      clearElement(list);
+
+      const notifications = getNotificationsForUser(currentUser.id);
+      markAllBtn.disabled = notifications.length === 0;
+
+      if (notifications.length === 0) {
+        list.appendChild(
+          createElement("p", {
+            className: "topbar-notifications-empty",
+            text: "No notifications yet."
+          })
+        );
+        return;
+      }
+
+      const visibleNotifications = notifications.slice(0, visibleNotificationCount);
+
+      visibleNotifications.forEach((notification) => {
+        const actor = notification.actorUserId
+          ? findUserById(notification.actorUserId)
+          : null;
+        const item = createElement("button", {
+          className: `topbar-notification-item${notification.read ? "" : " topbar-notification-item-unread"}`,
+          type: "button",
+          attributes: {
+            "aria-label": notification.title || "Notification"
+          }
+        });
+        const avatar = actor
+          ? createAvatarElement(actor, {
+              size: "sm",
+              className: "topbar-notification-avatar",
+              decorative: true
+            })
+          : createElement("span", {
+              className: "topbar-notification-avatar topbar-notification-avatar-fallback",
+              text: "!"
+            });
+        const copy = createElement("div", { className: "topbar-notification-copy" });
+        const itemTitle = createElement("strong", {
+          className: "topbar-notification-item-title",
+          text: getNotificationTitle(notification, actor)
+        });
+        const notificationBody = getNotificationBody(notification);
+        const itemTime = createElement("span", {
+          className: "topbar-notification-item-time",
+          text: formatNotificationTimestamp(notification.createdAt)
+        });
+
+        copy.append(itemTitle);
+
+        if (notificationBody) {
+          copy.appendChild(
+            createElement("p", {
+              className: "topbar-notification-item-text",
+              text: notificationBody
+            })
+          );
+        }
+
+        copy.appendChild(itemTime);
+        item.append(avatar, copy);
+        item.addEventListener("click", () => {
+          handleNotificationSelection({
+            notification,
+            currentUserId: currentUser.id,
+            onNavigate,
+            onNotificationsChange,
+            close
+          });
+        });
+
+        list.appendChild(item);
+      });
+
+      if (notifications.length > visibleNotifications.length) {
+        list.appendChild(
+          createLoadMoreControl({
+            label: "See more notifications",
+            className: "topbar-notifications-load-more",
+            onClick: () => {
+              visibleNotificationCount += NOTIFICATION_BATCH_SIZE;
+              renderList();
+            }
+          })
+        );
+      }
+    };
+
+    markAllBtn.addEventListener("click", () => {
+      clearNotificationsForUser(currentUser.id);
+      visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+      renderList();
+      close();
+      if (typeof onNotificationsChange === "function") {
+        onNotificationsChange();
+      }
+    });
+
+    header.append(title, notificationsToggle, markAllBtn);
+    panel.appendChild(header);
+    panel.appendChild(permissionHelper);
+    updatePermissionHelper();
+    renderList();
+    panel.appendChild(list);
+    root.append(overlay, panel);
+
+    overlay.addEventListener("click", close);
+    panel.addEventListener("click", (event) => event.stopPropagation());
+
+    return root;
+  };
+
+  const open = () => {
+    if (!root?.isConnected) {
+      visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+    }
+
+    const menu = ensureRoot();
+    if (!menu.isConnected) {
+      document.body.appendChild(menu);
+      window.requestAnimationFrame(() => {
+        menu.classList.add("topbar-notifications-root-open");
+      });
+    }
+
+    if (currentUser.notificationsEnabled !== false) {
+      void ensureBrowserNotificationPermission().then(() => {
+        updatePermissionHelper();
+      });
+      return;
+    }
+
+    updatePermissionHelper();
+  };
+
+  const close = () => {
+    if (!root?.isConnected) {
+      return;
+    }
+
+    root.classList.remove("topbar-notifications-root-open");
+    window.clearTimeout(closeTimerId);
+    closeTimerId = window.setTimeout(() => {
+      root?.remove();
+      closeTimerId = null;
+    }, 180);
+  };
+
+  return { open, close };
+}
+
+function createNotificationsToggle({ checked = true, onChange }) {
+  const label = createElement("label", {
+    className: "topbar-notifications-toggle"
+  });
+  const input = createElement("input", {
+    className: "topbar-notifications-toggle-input",
+    type: "checkbox",
+    attributes: {
+      "aria-label": "Enable notifications"
+    }
+  });
+  const track = createElement("span", {
+    className: "topbar-notifications-toggle-track"
+  });
+  const text = createElement("span", {
+    className: "topbar-notifications-toggle-label",
+    text: checked ? "On" : "Off"
+  });
+
+  input.checked = checked;
+  input.addEventListener("change", () => {
+    text.textContent = input.checked ? "On" : "Off";
+
+    if (typeof onChange === "function") {
+      onChange(input.checked);
+    }
+  });
+
+  label.append(text, input, track);
+  return label;
+}
+
+function handleNotificationSelection({
+  notification,
+  currentUserId,
+  onNavigate,
+  onNotificationsChange,
+  close
+}) {
+  if (notification.type === "dm" && notification.conversationId) {
+    clearConversationNotifications({
+      userId: currentUserId,
+      conversationId: notification.conversationId
+    });
+  } else {
+    removeNotification(notification.id);
+  }
+
+  if (typeof onNotificationsChange === "function") {
+    onNotificationsChange();
+  }
+
+  close();
+
+  if (notification.type === "dm" && notification.conversationId) {
+    onNavigate("messages", {
+      conversationId: notification.conversationId
+    });
+    return;
+  }
+
+  if (notification.type === "follow" && notification.actorUserId) {
+    window.requestAnimationFrame(() => {
+      showUserPreviewSheet({
+        userId: notification.actorUserId,
+        currentUserId
+      });
+    });
+    return;
+  }
+
+  if (
+    (notification.type === "post_comment" || notification.type === "comment_reply") &&
+    notification.postId
+  ) {
+    onNavigate("feed", {
+      postId: notification.postId,
+      focusCommentId: notification.commentId || null
+    });
+    return;
+  }
+
+  onNavigate("feed");
+}
+
+function createAccountMenu({ currentUser, messagesMenuLabel, onNavigate, onLogout }) {
   let root = null;
   let closeTimerId = null;
 
@@ -525,6 +978,11 @@ function createAccountMenu({ currentUser, onNavigate, onLogout }) {
     const actions = createElement("div", { className: "topbar-account-actions" });
     actions.append(
       createAccountItem({
+        iconName: "messages",
+        label: messagesMenuLabel,
+        onSelect: () => onNavigate("messages")
+      }),
+      createAccountItem({
         iconName: "logout",
         label: "Sign out",
         danger: true,
@@ -568,7 +1026,7 @@ function createAccountMenu({ currentUser, onNavigate, onLogout }) {
 }
 
 function createDrawerItem({ iconName, label, onSelect, danger = false }) {
-  return createMenuItem({
+  const button = createMenuItem({
     iconName,
     label,
     onSelect,
@@ -579,6 +1037,9 @@ function createDrawerItem({ iconName, label, onSelect, danger = false }) {
     rootSelector: ".topbar-drawer-root",
     openClassName: "topbar-drawer-root-open"
   });
+
+  button.classList.add(`topbar-drawer-item-${iconName}`);
+  return button;
 }
 
 function createAccountItem({ iconName, label, onSelect, danger = false }) {
@@ -662,6 +1123,77 @@ function formatSearchModeLabel(value) {
   return value === "users" ? "Users" : "Posts";
 }
 
+function getNotificationTitle(notification, actor) {
+  const actorName = actor?.username || "Someone";
+
+  if (notification.type === "dm") {
+    return `${actorName} sent you a message`;
+  }
+
+  if (notification.type === "follow") {
+    return `${actorName} followed you`;
+  }
+
+  if (notification.type === "post_comment") {
+    return `${actorName} commented on your post`;
+  }
+
+  if (notification.type === "comment_reply") {
+    return `${actorName} replied to your comment`;
+  }
+
+  return notification.title || "Notification";
+}
+
+function getNotificationBody(notification) {
+  if (
+    notification.type === "dm" ||
+    notification.type === "follow" ||
+    notification.type === "post_comment" ||
+    notification.type === "comment_reply"
+  ) {
+    return "";
+  }
+
+  return notification.text || "";
+}
+
+function formatNotificationTimestamp(isoDate) {
+  const date = new Date(isoDate);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Now";
+  }
+
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.max(Math.floor(diffMs / 60000), 0);
+
+  if (diffMinutes < 1) {
+    return "just now";
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  if (diffHours < 24) {
+    return `${diffHours}h`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffDays < 7) {
+    return `${diffDays}d`;
+  }
+
+  return new Intl.DateTimeFormat("en-ZA", {
+    month: "short",
+    day: "numeric"
+  }).format(date);
+}
+
 function getTopbarButtonClass(isActive) {
   return isActive
     ? "secondary-btn topbar-utility-btn topbar-utility-btn-active"
@@ -722,6 +1254,9 @@ function getNavIconPath(name) {
     menu: "M4 7h16M4 12h16M4 17h16",
     back: "M15 18 9 12l6-6",
     notifications: "M15 17h5l-1.4-1.4a2 2 0 0 1-.6-1.4V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5m2 0a2 2 0 0 0 4 0h-4Z",
+    messages:
+      "M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-5 4v-4H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z",
+    install: "M12 3v10m0 0 4-4m-4 4-4-4M5 17v3h14v-3",
     profile: "M12 12a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm-6 7a6 6 0 0 1 12 0",
     logout: "M14 7l5 5-5 5M19 12H9M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h3"
   };

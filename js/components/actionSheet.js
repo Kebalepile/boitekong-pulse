@@ -101,6 +101,8 @@ function inferActionSheetIconName(label = "") {
   if (normalized.includes("report")) return "report";
   if (normalized.includes("edit")) return "edit";
   if (normalized.includes("delete")) return "delete";
+  if (normalized.includes("unblock")) return "unblock";
+  if (normalized.includes("block")) return "block";
   if (normalized.includes("sign out") || normalized.includes("logout")) return "logout";
   if (normalized.includes("download")) return "download";
   if (normalized.includes("save")) return "save";
@@ -132,6 +134,10 @@ function getActionSheetIconPath(name) {
     report: "M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z",
     edit: "m4 20 4.5-1 9.9-9.9a1.8 1.8 0 0 0 0-2.54l-.96-.96a1.8 1.8 0 0 0-2.54 0L5 15.5 4 20Zm8-12 4 4",
     delete: "M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13",
+    block:
+      "M15 14a4 4 0 1 0-6 0m6 0a6 6 0 0 1 2.5 1.8M9 14a6 6 0 0 0-2.5 1.8M4 4l16 16",
+    unblock:
+      "M15 14a4 4 0 1 0-6 0m6 0a6 6 0 0 1 2.5 1.8M9 14a6 6 0 0 0-2.5 1.8M4 4l16 16M17.5 6.5l-11 11",
     logout: "M14 16l4-4-4-4M8 12h10M10 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4",
     download: "M12 3v11m0 0 4-4m-4 4-4-4M5 21h14",
     save: "M6 3h11l4 4v14H3V3h3Zm0 0v6h8V3",

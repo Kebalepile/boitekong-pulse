@@ -13,100 +13,86 @@ import { createBrandMark } from "../components/brandMark.js";
 export function renderLogin(app) {
   clearElement(app);
 
-  const shell = createElement("section", { className: "auth-shell" });
-  const card = createElement("div", { className: "auth-card" });
-  const intro = createElement("div", { className: "auth-intro" });
-  const introEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Rustenburg, connected"
-  });
-
+  const shell = createElement("section", { className: "auth-shell auth-shell-login" });
+  const layout = createElement("div", { className: "auth-layout auth-layout-login" });
+  const showcase = createLoginShowcase();
+  const pane = createElement("section", { className: "auth-pane auth-pane-login" });
+  const mobileBrand = createElement("div", { className: "auth-mobile-brand" });
+  const card = createElement("div", { className: "auth-card auth-card-login" });
+  const header = createElement("div", { className: "auth-card-copy auth-card-copy-login" });
   const title = createElement("h1", {
     className: "auth-title",
-    text: "Welcome back"
+    text: "Log in to Boitekong Pulse"
   });
-
   const subtitle = createElement("p", {
     className: "auth-subtitle",
-    text: "Open Boitekong Now and catch up on the latest local posts, replies, and voice notes."
-  });
-  const featureList = createElement("div", { className: "auth-feature-list" });
-
-  [
-    "Hyper-local township feed",
-    "Layered comment threads",
-    "Voice-note conversations"
-  ].forEach((itemText) => {
-    featureList.appendChild(
-      createElement("span", {
-        className: "auth-feature-chip",
-        text: itemText
-      })
-    );
+    text: "Log back into the local platform for township updates, replies, and voice notes that stay close to home."
   });
 
   const form = createElement("form", {
-    className: "auth-form",
+    className: "auth-form auth-form-login",
     id: "login-form"
   });
 
-  const usernameField = createField({
-    labelText: "Username",
-    inputId: "login-username",
+  const identifierField = createField({
+    labelText: "Username or phone number",
+    inputId: "login-identifier",
     type: "text",
-    placeholder: "Enter username",
-    autocomplete: "username",
-    helperText: "Use the username you registered with."
+    autocomplete: "username"
   });
 
   const passwordField = createField({
     labelText: "Password",
     inputId: "login-password",
     type: "password",
-    placeholder: "Enter password",
-    autocomplete: "current-password",
-    helperText: "Enter your account password."
+    autocomplete: "current-password"
   });
 
   const submitBtn = createElement("button", {
     className: "primary-btn auth-submit-btn",
-    text: "Log In",
+    text: "Log in",
     type: "submit"
   });
 
-  form.append(usernameField, passwordField, submitBtn);
-
-  const footer = createElement("div", { className: "auth-footer" });
-  const footerText = createElement("span", {
-    text: "Don't have an account?"
+  const forgotBtn = createElement("button", {
+    className: "link-btn auth-aux-link",
+    text: "Forgot password?",
+    type: "button"
   });
 
   const registerBtn = createElement("button", {
-    className: "link-btn",
-    text: "Register",
+    className: "secondary-btn auth-outline-btn",
+    text: "Create new account",
     type: "button",
     id: "go-register"
   });
 
-  footer.append(footerText, registerBtn);
-  intro.append(createBrandMark(), introEyebrow, title, subtitle, featureList);
-  card.append(intro, form, footer);
-  shell.appendChild(card);
+  form.append(identifierField, passwordField, submitBtn);
+  header.append(title, subtitle);
+  mobileBrand.appendChild(createBrandMark({ compact: true, showTagline: false }));
+  card.append(header, form, forgotBtn, registerBtn);
+  pane.append(mobileBrand, card);
+  layout.append(showcase, pane);
+  shell.append(layout, createAuthSiteFooter());
   app.appendChild(shell);
 
   registerBtn.addEventListener("click", () => {
     navigate("register");
   });
 
+  forgotBtn.addEventListener("click", () => {
+    showToast("Password reset can be added once backend is connected.", "success");
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearFormErrors(form);
 
-    const username = document.getElementById("login-username").value;
+    const identifier = document.getElementById("login-identifier").value;
     const password = document.getElementById("login-password").value;
 
     try {
-      await loginUser({ username, password });
+      await loginUser({ identifier, password });
       showToast("Logged in successfully.", "success");
       navigate("feed");
     } catch (error) {
@@ -115,39 +101,147 @@ export function renderLogin(app) {
   });
 }
 
-function createField({ labelText, inputId, type, placeholder, autocomplete, helperText = "" }) {
-  const wrapper = createElement("div", { className: "field-group" });
-
-  const label = createElement("label", {
-    className: "form-label",
-    text: labelText
+function createField({ labelText, inputId, type, autocomplete }) {
+  const wrapper = createElement("div", { className: "field-group auth-field-group" });
+  const fieldShell = createElement("label", {
+    className: "form-label auth-floating-field",
+    attributes: {
+      for: inputId
+    }
   });
-
   const input = createElement("input", {
-    className: "form-input",
+    className: "form-input auth-form-input",
     id: inputId,
     type,
-    placeholder,
+    placeholder: " ",
     required: true,
-    autocomplete
+    autocomplete,
+    attributes: {
+      "aria-label": labelText
+    }
   });
-
-  const helper = createElement("p", {
-    className: "field-helper",
-    text: helperText
+  const caption = createElement("span", {
+    className: "auth-floating-label",
+    text: labelText
   });
-
   const error = createFieldError(inputId);
 
-  label.appendChild(input);
-  wrapper.append(label, helper, error);
+  const syncFieldState = () => {
+    const missingRequired =
+      input.dataset.touched === "true" && input.required && !input.value.trim();
+    const hasError = input.classList.contains("input-error");
+    fieldShell.classList.toggle("auth-floating-field-invalid", missingRequired || hasError);
+    input.classList.toggle("auth-empty-error", missingRequired);
+  };
+
+  input.addEventListener("blur", () => {
+    input.dataset.touched = "true";
+    syncFieldState();
+  });
+
+  input.addEventListener("input", () => {
+    if (input.classList.contains("input-error")) {
+      input.classList.remove("input-error");
+    }
+
+    if (error.textContent) {
+      error.textContent = "";
+    }
+
+    syncFieldState();
+  });
+
+  input.addEventListener("invalid", () => {
+    input.dataset.touched = "true";
+    syncFieldState();
+  });
+
+  fieldShell.append(input, caption);
+  wrapper.append(fieldShell, error);
 
   return wrapper;
 }
 
+function createLoginShowcase() {
+  const showcase = createElement("section", {
+    className: "auth-showcase auth-showcase-login"
+  });
+  const brand = createBrandMark({ showTagline: false });
+  const title = createElement("h2", {
+    className: "auth-showcase-title"
+  });
+  const titleLead = createElement("span", {
+    className: "auth-showcase-title-line",
+    text: "From Boitekong."
+  });
+  const titleAccent = createElement("span", {
+    className: "auth-showcase-title-line auth-showcase-title-accent",
+    text: "For Boitekong."
+  });
+  const copy = createElement("p", {
+    className: "auth-showcase-copy",
+    text: "Boitekong Pulse is built for local updates, real replies, and voice notes from people who actually know home."
+  });
+  const collage = createElement("div", { className: "auth-showcase-stack" });
+
+  [
+    "Kasi updates",
+    "Voice notes from nearby",
+    "Replies that keep the loop alive"
+  ].forEach((itemText, index) => {
+    const card = createElement("div", {
+      className: `auth-showcase-card auth-showcase-card-${index + 1}`
+    });
+    const badge = createElement("span", {
+      className: "auth-showcase-card-badge",
+      text: "BP"
+    });
+    const text = createElement("p", {
+      className: "auth-showcase-card-text",
+      text: itemText
+    });
+
+    card.append(badge, text);
+    collage.appendChild(card);
+  });
+
+  title.append(titleLead, titleAccent);
+  showcase.append(brand, title, copy, collage);
+  return showcase;
+}
+
+function createAuthSiteFooter() {
+  const footer = createElement("footer", { className: "auth-site-footer" });
+  const links = createElement("div", { className: "auth-site-footer-links" });
+  const meta = createElement("div", { className: "auth-site-footer-meta" });
+
+  ["About", "Help", "Privacy", "Terms & Conditions", "Contact"].forEach((itemText) => {
+    links.appendChild(
+      createElement("span", {
+        className: "auth-site-footer-link",
+        text: itemText
+      })
+    );
+  });
+
+  meta.append(
+    createElement("span", {
+      className: "auth-site-footer-meta-text",
+      text: "English"
+    }),
+    createElement("span", {
+      className: "auth-site-footer-meta-text",
+      text: "Copyright 2025 Boitekong Pulse"
+    })
+  );
+
+  footer.append(links, meta);
+  return footer;
+}
+
 function handleLoginError(error) {
   const fieldMap = {
-    username: "login-username",
+    identifier: "login-identifier",
     password: "login-password"
   };
 

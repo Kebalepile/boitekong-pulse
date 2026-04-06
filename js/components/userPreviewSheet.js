@@ -11,6 +11,7 @@ import {
 } from "../services/userService.js";
 import { showToast } from "./toast.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
+import { navigate } from "../router.js";
 
 const USER_PREVIEW_ROOT_ID = "user-preview-sheet-root";
 
@@ -193,7 +194,8 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
 
       dmBtn.appendChild(createDmIcon());
       dmBtn.addEventListener("click", () => {
-        showToast("Direct messages are coming soon.", "success");
+        closeSheet();
+        navigate("messages", { userId: user.id });
       });
 
       followBtn.addEventListener("click", () => {

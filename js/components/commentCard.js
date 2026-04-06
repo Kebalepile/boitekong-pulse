@@ -246,7 +246,7 @@ function getCommentActionIconPath(name) {
   return iconPaths[name] || iconPaths.more;
 }
 
-function createVoiceNotePlayer(voiceNote) {
+export function createVoiceNotePlayer(voiceNote) {
   const block = createElement("div", {
     className: "comment-voice-note voice-note-player"
   });
@@ -300,7 +300,11 @@ function createVoiceNotePlayer(voiceNote) {
 
   const syncPlayer = () => {
     const isPlaying = !audio.paused && !audio.ended;
-    const progressRatio = totalDurationSeconds > 0 ? audio.currentTime / totalDurationSeconds : 0;
+    const progressRatio = audio.ended
+      ? 1
+      : totalDurationSeconds > 0
+        ? audio.currentTime / totalDurationSeconds
+        : 0;
 
     bubble.classList.toggle("voice-note-bubble-playing", isPlaying);
     setVoiceNoteControlIcon(playBtn, isPlaying ? "pause" : "play");

@@ -1,9 +1,9 @@
-const DEFAULT_POINT_COUNT = 72;
+const DEFAULT_POINT_COUNT = 120;
 const IDLE_LEVEL = 0.08;
 const MAX_STORED_SAMPLES = 96;
 const WAVEFORM_HEIGHT = 32;
-const PLAYED_COLOR = "#ffffff";
-const UNPLAYED_COLOR = "#94a3b8";
+const PLAYED_COLOR = "#111827";
+const UNPLAYED_COLOR = "#cbd5e1";
 const RECORDING_COLOR = "#64748b";
 const GUIDE_COLOR = "#dbe4ea";
 
@@ -20,7 +20,6 @@ export function createVoiceNoteVisualizer({
   let connectedAudioElement = null;
   let canvas = null;
   let context = null;
-
   buildCanvas();
   renderStoredWaveform({ waveform: [], progressRatio: 0 });
 
@@ -206,7 +205,7 @@ export function createVoiceNoteVisualizer({
 
   function getRenderPointCount() {
     const width = Math.max(120, Math.round(waveformElement.clientWidth || 240));
-    return Math.max(pointCount, Math.floor(width / 4));
+    return Math.max(pointCount, Math.floor(width / 2.5));
   }
 
   function renderWaveform({
@@ -231,7 +230,7 @@ export function createVoiceNoteVisualizer({
 
     points.forEach((level, index) => {
       const position = getPointPosition(index, points.length);
-      const x = Math.round(position * width);
+      const x = position * width;
       const idle = isLive ? IDLE_LEVEL * 0.55 : IDLE_LEVEL;
       const amplitude = clamp(level || 0, 0, 1);
       const shouldReveal = !revealByProgress || position <= safeProgress;
@@ -244,7 +243,7 @@ export function createVoiceNoteVisualizer({
         isPlayed: position <= safeProgress,
         level: effectiveLevel
       });
-      context.lineWidth = position % 7 === 0 ? 2 : 1.15;
+      context.lineWidth = index % 10 === 0 ? 1.8 : 1;
       context.lineCap = "round";
       context.moveTo(x, centerY - peak);
       context.lineTo(x, centerY + peak);
@@ -508,7 +507,10 @@ function updateProgressLine(progressLineElement, progressRatio, isVisible) {
   }
 
   progressLineElement.style.opacity = isVisible ? "1" : "0";
-  progressLineElement.style.left = `${clamp(progressRatio, 0, 1) * 100}%`;
+
+  const safeProgress = clamp(progressRatio, 0, 1);
+  progressLineElement.style.left =
+    safeProgress >= 1 ? "calc(100% + 2px)" : `${safeProgress * 100}%`;
 }
 
 function getPointPosition(index, size) {

@@ -5,7 +5,7 @@ import {
   validateImageUrl
 } from "../utils/validators.js";
 
-export function createPost({ userId, content, image = "", location }) {
+export function createPost({ userId, content = "", image = "", location, voiceNote = null }) {
   if (!userId || typeof userId !== "string") {
     throw new Error("A valid userId is required.");
   }
@@ -13,12 +13,13 @@ export function createPost({ userId, content, image = "", location }) {
   return {
     id: crypto.randomUUID(),
     userId,
-    content: validatePostContent(content),
+    content,
     image: validateImageUrl(image),
     location: {
       township: validateTownship(location.township),
       extension: validateExtension(location.extension)
     },
+    voiceNote: voiceNote?.dataUrl ? voiceNote : null,
     reactions: {
       like: [],
       dislike: []

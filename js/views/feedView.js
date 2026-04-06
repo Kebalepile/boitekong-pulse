@@ -1,12 +1,22 @@
 import { clearElement, createElement } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
 import { navigate } from "../router.js";
-import { getPosts } from "../services/postService.js";
+import { getVisiblePosts } from "../services/postService.js";
 import { findUserById } from "../services/userService.js";
-import { createPostCard } from "../components/postCard.js";
+import { createPostCard, openCommentsSheetForPost } from "../components/postCard.js";
+import { FEED_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
 
-export function renderFeed(app, currentUser) {
+export function renderFeed(app, currentUser, payload = null) {
   clearElement(app);
+  let visiblePostsCount = FEED_BATCH_SIZE;
+  let lastFilterKey = "";
+  let pendingCommentsTarget =
+    typeof payload?.postId === "string"
+      ? {
+          postId: payload.postId,
+          focusCommentId: typeof payload?.focusCommentId === "string" ? payload.focusCommentId : null
+        }
+      : null;
 
   const shell = createElement("section", { className: "feed-shell" });
   const navbar = createNavbar(currentUser, "feed");
@@ -15,7 +25,7 @@ export function renderFeed(app, currentUser) {
   const feedHeader = createElement("section", {
     className: "feed-header-card feed-hero-card"
   });
-  const posts = getPosts();
+  const posts = getVisiblePosts(currentUser.id);
 
   const eyebrow = createElement("p", {
     className: "section-eyebrow",
@@ -79,7 +89,7 @@ export function renderFeed(app, currentUser) {
     const townshipQuery = townshipInput.value.trim().toLocaleLowerCase();
     const extensionQuery = extensionInput.value.trim().toLocaleLowerCase();
 
-    let posts = getPosts();
+    let posts = getVisiblePosts(currentUser.id);
 
     if (townshipQuery) {
       posts = posts.filter((post) =>
@@ -91,6 +101,13 @@ export function renderFeed(app, currentUser) {
       posts = posts.filter((post) =>
         post.location.extension.toLocaleLowerCase().includes(extensionQuery)
       );
+    }
+
+    const filterKey = `${townshipQuery}::${extensionQuery}`;
+
+    if (filterKey !== lastFilterKey) {
+      lastFilterKey = filterKey;
+      visiblePostsCount = FEED_BATCH_SIZE;
     }
 
     if (posts.length === 0) {
@@ -118,11 +135,39 @@ export function renderFeed(app, currentUser) {
       return;
     }
 
-    posts.forEach((post) => {
+    const visiblePosts = posts.slice(0, visiblePostsCount);
+
+    visiblePosts.forEach((post) => {
       const author = findUserById(post.userId);
       const postCard = createPostCard(post, author, currentUser.id, renderPosts);
       feedList.appendChild(postCard);
     });
+
+    if (posts.length > visiblePosts.length) {
+      feedList.appendChild(
+        createLoadMoreControl({
+          label: "See more posts",
+          onClick: () => {
+            visiblePostsCount += FEED_BATCH_SIZE;
+            renderPosts();
+          }
+        })
+      );
+    }
+
+    if (pendingCommentsTarget) {
+      const { postId, focusCommentId } = pendingCommentsTarget;
+      pendingCommentsTarget = null;
+
+      window.requestAnimationFrame(() => {
+        openCommentsSheetForPost({
+          postId,
+          currentUserId: currentUser.id,
+          onPostChange: renderPosts,
+          focusCommentId
+        });
+      });
+    }
   };
 
   townshipInput.addEventListener("input", renderPosts);
