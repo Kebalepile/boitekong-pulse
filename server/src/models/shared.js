@@ -1,0 +1,98 @@
+import mongoose from "mongoose";
+
+const { Schema } = mongoose;
+
+export const locationSchema = new Schema(
+  {
+    township: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    extension: {
+      type: String,
+      required: true,
+      trim: true
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+export const voiceNoteSchema = new Schema(
+  {
+    url: {
+      type: String,
+      default: ""
+    },
+    storageKey: {
+      type: String,
+      default: ""
+    },
+    mimeType: {
+      type: String,
+      default: "audio/webm"
+    },
+    durationSeconds: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    sizeBytes: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    waveform: {
+      type: [Number],
+      default: undefined
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+export const reactionSchema = new Schema(
+  {
+    likeUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User"
+      }
+    ],
+    mehUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User"
+      }
+    ],
+    dislikeUserIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User"
+      }
+    ]
+  },
+  {
+    _id: false
+  }
+);
+
+export const readReceiptSchema = new Schema(
+  {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    seenAt: {
+      type: Date,
+      default: Date.now
+    }
+  },
+  {
+    _id: false
+  }
+);

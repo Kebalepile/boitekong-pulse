@@ -1,0 +1,22 @@
+{
+  "name": "boitekong-pulse",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:init": "node server/src/scripts/initDatabase.js",
+    "dev:api": "node --watch server/src/server.js",
+    "start:api": "node server/src/server.js",
+    "check:api": "node --check server/src/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^7.1.1",
+    "mongoose": "^8.12.1",
+    "morgan": "^1.10.0"
+  }
+}
