@@ -24,6 +24,10 @@ import {
   getNextVoiceNotePlaybackRate,
   formatVoiceNotePlaybackRate
 } from "../utils/voiceNotes.js";
+import {
+  getVoiceNoteDailyLimitMessage,
+  isVoiceNoteDailyLimitError
+} from "../utils/voiceNoteLimit.js";
 import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
 import {
   createVoiceNoteVisualizer,
@@ -224,7 +228,7 @@ export function renderCreatePost(app, currentUser) {
   attachCharacterCounter(contentField.input, contentField.counter);
   updateMode("text");
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearFormErrors(form);
 
@@ -244,15 +248,10 @@ export function renderCreatePost(app, currentUser) {
               voiceNote: null
             });
 
-      createAndStorePost({
-        userId: currentUser.id,
+      await createAndStorePost({
         content: postPayload.content,
         voiceNote: postPayload.voiceNote,
-        image: "",
-        location: {
-          township: currentUser.location.township,
-          extension: currentUser.location.extension
-        }
+        image: ""
       });
 
       if (voiceComposer) {
@@ -748,7 +747,9 @@ function createTrashIcon() {
 }
 
 function handleCreatePostError(error, submissionMode) {
-  const message = error.message || "Failed to create post.";
+  const message = isVoiceNoteDailyLimitError(error)
+    ? getVoiceNoteDailyLimitMessage(error)
+    : error.message || "Failed to create post.";
   const field = error?.field || "";
 
   if (submissionMode === "text" && (field === "content" || message.toLowerCase().includes("post content"))) {

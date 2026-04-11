@@ -1,13 +1,36 @@
 import { clearElement, createElement } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
-import { navigate } from "../router.js";
-import { getVisiblePosts } from "../services/postService.js";
+import { navigate, registerViewCleanup } from "../router.js";
+import {
+  getVisiblePosts,
+  loadFeedPosts,
+  loadPostById,
+  subscribeToPostChanges
+} from "../services/postService.js";
 import { findUserById } from "../services/userService.js";
 import { createPostCard, openCommentsSheetForPost } from "../components/postCard.js";
 import { FEED_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
+import { setLiveSyncOptions } from "../services/liveSyncService.js";
+import { showToast } from "../components/toast.js";
 
-export function renderFeed(app, currentUser, payload = null) {
+export async function renderFeed(app, currentUser, payload = null) {
   clearElement(app);
+  const initialLoadTasks = [loadFeedPosts()];
+
+  if (typeof payload?.postId === "string" && payload.postId.trim()) {
+    initialLoadTasks.push(loadPostById(payload.postId));
+  }
+
+  const initialLoadResults = await Promise.allSettled(initialLoadTasks);
+  const failedInitialLoads = initialLoadResults.filter((result) => result.status === "rejected");
+
+  if (failedInitialLoads.length > 0) {
+    showToast(
+      "Could not fully refresh the feed. Showing available cached posts.",
+      "error"
+    );
+  }
+
   let visiblePostsCount = FEED_BATCH_SIZE;
   let lastFilterKey = "";
   let pendingCommentsTarget =
@@ -25,7 +48,6 @@ export function renderFeed(app, currentUser, payload = null) {
   const feedHeader = createElement("section", {
     className: "feed-header-card feed-hero-card"
   });
-  const posts = getVisiblePosts(currentUser.id);
 
   const feedTitle = createElement("h2", {
     className: "section-title",
@@ -37,13 +59,6 @@ export function renderFeed(app, currentUser, payload = null) {
   });
   const statScroller = createElement("div", { className: "feed-stat-scroller" });
   const statRow = createElement("div", { className: "feed-stat-row" });
-  const uniqueAuthors = new Set(posts.map((post) => post.userId)).size;
-
-  statRow.append(
-    createStatPill("Posts", String(posts.length)),
-    createStatPill("Neighbors", String(uniqueAuthors)),
-    createStatPill("Your B-Point", `${currentUser.location.township} ${currentUser.location.extension}`)
-  );
   statScroller.appendChild(statRow);
 
   const filters = createElement("div", { className: "filter-row" });
@@ -99,6 +114,17 @@ export function renderFeed(app, currentUser, payload = null) {
       );
     }
 
+    const uniqueAuthors = new Set(posts.map((post) => post.userId)).size;
+    clearElement(statRow);
+    statRow.append(
+      createStatPill("Posts", String(posts.length)),
+      createStatPill("Neighbors", String(uniqueAuthors)),
+      createStatPill(
+        "Your B-Point",
+        `${currentUser.location.township} ${currentUser.location.extension}`
+      )
+    );
+
     const filterKey = `${townshipQuery}::${extensionQuery}`;
 
     if (filterKey !== lastFilterKey) {
@@ -134,7 +160,7 @@ export function renderFeed(app, currentUser, payload = null) {
     const visiblePosts = posts.slice(0, visiblePostsCount);
 
     visiblePosts.forEach((post) => {
-      const author = findUserById(post.userId);
+      const author = post.author || findUserById(post.userId);
       const postCard = createPostCard(post, author, currentUser.id, renderPosts);
       feedList.appendChild(postCard);
     });
@@ -174,6 +200,20 @@ export function renderFeed(app, currentUser, payload = null) {
     extensionInput.value = "";
     renderPosts();
   });
+
+  setLiveSyncOptions({
+    includePosts: true
+  });
+  registerViewCleanup(() => {
+    setLiveSyncOptions({
+      includePosts: false
+    });
+  });
+  registerViewCleanup(
+    subscribeToPostChanges(() => {
+      renderPosts();
+    })
+  );
 
   renderPosts();
 }

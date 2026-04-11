@@ -6,22 +6,52 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
-import { navigate } from "../router.js";
+import { navigate, registerViewCleanup } from "../router.js";
 import { showToast } from "../components/toast.js";
 import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
-import { updateAuthenticatedUserProfile } from "../services/authService.js";
+import {
+  requestPhoneVerificationOtp,
+  updateAuthenticatedUserProfile,
+  verifyAuthenticatedUserPhoneOtp
+} from "../services/authService.js";
 import { createAvatarElement, readFileAsDataUrl } from "../utils/avatar.js";
 import { validateAvatarFile, MAX_AVATAR_FILE_BYTES } from "../utils/validators.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
-import { getPostsByUserId } from "../services/postService.js";
 import {
-  getFollowerCount,
+  getPostsByUserId,
+  loadPostsByUserId,
+  subscribeToPostChanges
+} from "../services/postService.js";
+import {
   getFollowerUsers,
-  getFollowingUsers
+  getFollowingUsers,
+  fetchFollowerUsers,
+  fetchFollowingUsers
 } from "../services/userService.js";
+import { setLiveSyncOptions } from "../services/liveSyncService.js";
 
-export function renderProfile(app, currentUser, payload = null) {
+export async function renderProfile(app, currentUser, payload = null) {
   clearElement(app);
+  const profileLoadResults = await Promise.allSettled([
+    fetchFollowerUsers(currentUser.id),
+    fetchFollowingUsers(currentUser.id),
+    loadPostsByUserId(currentUser.id)
+  ]);
+  const followerUsers =
+    profileLoadResults[0]?.status === "fulfilled"
+      ? profileLoadResults[0].value
+      : getFollowerUsers(currentUser.id);
+  const followingUsers =
+    profileLoadResults[1]?.status === "fulfilled"
+      ? profileLoadResults[1].value
+      : getFollowingUsers(currentUser.id);
+
+  if (profileLoadResults.some((result) => result.status === "rejected")) {
+    showToast(
+      "Could not fully refresh your profile. Showing cached details where available.",
+      "error"
+    );
+  }
 
   const shell = createElement("section", { className: "feed-shell" });
   const navbar = createNavbar(currentUser, "profile");
@@ -33,11 +63,8 @@ export function renderProfile(app, currentUser, payload = null) {
   if (activeSection === "followers" || activeSection === "following") {
     main.classList.add("profile-page-main-people");
   }
-  const userPosts = getPostsByUserId(currentUser.id);
-  const followerCount = getFollowerCount(currentUser.id);
-  const followingCount = Array.isArray(currentUser.followingUserIds)
-    ? currentUser.followingUserIds.length
-    : 0;
+  const followerCount = followerUsers.length;
+  const followingCount = followingUsers.length;
   const avatarState = {
     dataUrl: currentUser.avatarDataUrl || ""
   };
@@ -66,7 +93,7 @@ export function renderProfile(app, currentUser, payload = null) {
   });
   const metaRow = createElement("p", {
     className: "profile-channel-meta",
-    text: `${formatCompactCount(userPosts.length)} ${userPosts.length === 1 ? "post" : "posts"} | ${formatCompactCount(followerCount)} ${followerCount === 1 ? "follower" : "followers"} | ${formatCompactCount(followingCount)} following | Joined ${formatJoinDate(currentUser.createdAt)}`
+    text: ""
   });
   const actionRow = createElement("div", { className: "profile-channel-actions" });
   const editProfileBtn = createElement("button", {
@@ -134,7 +161,8 @@ export function renderProfile(app, currentUser, payload = null) {
       summaryCard,
       createPeoplePanel({
         currentUser,
-        section: activeSection
+        section: activeSection,
+        users: activeSection === "followers" ? followerUsers : followingUsers
       })
     );
   } else if (showEditForm) {
@@ -150,7 +178,31 @@ export function renderProfile(app, currentUser, payload = null) {
   shell.append(navbar, main);
   app.appendChild(shell);
 
+  const syncMetaRow = () => {
+    const nextUserPosts = getPostsByUserId(currentUser.id);
+    metaRow.textContent = `${formatCompactCount(nextUserPosts.length)} ${
+      nextUserPosts.length === 1 ? "post" : "posts"
+    } | ${formatCompactCount(followerCount)} ${
+      followerCount === 1 ? "follower" : "followers"
+    } | ${formatCompactCount(followingCount)} following | Joined ${formatJoinDate(currentUser.createdAt)}`;
+  };
+
+  setLiveSyncOptions({
+    includePosts: true
+  });
+  registerViewCleanup(() => {
+    setLiveSyncOptions({
+      includePosts: false
+    });
+  });
+  registerViewCleanup(
+    subscribeToPostChanges(() => {
+      syncMetaRow();
+    })
+  );
+
   renderAvatarPreview(avatarPreview, currentUser);
+  syncMetaRow();
 
   if (!profileEditor) {
     return;
@@ -272,6 +324,231 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
   return wrapper;
 }
 
+function createPhoneVerificationField({
+  currentUser,
+  form,
+  getPendingPhoneNumber
+}) {
+  const wrapper = createElement("div", {
+    className: "field-group profile-phone-verification-field"
+  });
+  const header = createElement("div", {
+    className: "profile-edit-panel-copy profile-phone-verification-copy"
+  });
+  const title = createElement("h3", {
+    className: "profile-edit-panel-title",
+    text: "Phone verification"
+  });
+  const status = createElement("p", {
+    className: "profile-edit-panel-text",
+    text: ""
+  });
+  const codeRow = createElement("div", {
+    className: "profile-phone-verification-row"
+  });
+  const codeLabel = createElement("label", {
+    className: "form-label",
+    text: "Verification code"
+  });
+  const codeInput = createElement("input", {
+    className: "form-input",
+    id: "profile-phone-otp",
+    type: "text",
+    placeholder: "Enter the SMS code",
+    required: false,
+    autocomplete: "one-time-code",
+    attributes: {
+      inputmode: "numeric",
+      maxlength: "8"
+    }
+  });
+  const actions = createElement("div", {
+    className: "form-actions profile-phone-verification-actions"
+  });
+  const sendBtn = createElement("button", {
+    className: "secondary-btn",
+    type: "button",
+    text: "Send code"
+  });
+  const verifyBtn = createElement("button", {
+    className: "primary-btn",
+    type: "button",
+    text: "Verify phone"
+  });
+  const error = createFieldError("profile-phone-otp");
+
+  let otpState = null;
+  let sending = false;
+  let verifying = false;
+  let countdownIntervalId = null;
+
+  const clearCountdown = () => {
+    if (countdownIntervalId) {
+      window.clearInterval(countdownIntervalId);
+      countdownIntervalId = null;
+    }
+  };
+
+  const formatCountdown = (targetIsoDate) => {
+    const remainingMs = new Date(targetIsoDate).getTime() - Date.now();
+    const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+
+    if (minutes <= 0) {
+      return `${seconds}s`;
+    }
+
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  };
+
+  const formatDateTime = (isoDate) => {
+    const date = new Date(isoDate);
+
+    if (Number.isNaN(date.getTime())) {
+      return "soon";
+    }
+
+    return new Intl.DateTimeFormat("en-ZA", {
+      dateStyle: "medium",
+      timeStyle: "short"
+    }).format(date);
+  };
+
+  const syncUi = () => {
+    const savedPhoneNumber = String(currentUser.phoneNumber || "").trim();
+    const pendingPhoneNumber =
+      typeof getPendingPhoneNumber === "function"
+        ? String(getPendingPhoneNumber() || "").trim()
+        : savedPhoneNumber;
+    const phoneChanged = pendingPhoneNumber !== savedPhoneNumber;
+    const phoneVerified = currentUser.phoneVerified === true && !phoneChanged;
+    const hasSavedPhone = Boolean(savedPhoneNumber);
+    const cooldownActive = Boolean(
+      otpState?.cooldownUntil &&
+        new Date(otpState.cooldownUntil).getTime() > Date.now()
+    );
+
+    clearCountdown();
+
+    if (phoneChanged) {
+      status.textContent = "Save your updated phone number before requesting a verification code.";
+    } else if (!hasSavedPhone) {
+      status.textContent = "Add a phone number first, then save your profile to verify it.";
+    } else if (phoneVerified) {
+      status.textContent = `This number is already verified: ${savedPhoneNumber}.`;
+    } else if (otpState?.expiresAt) {
+      status.textContent = cooldownActive
+        ? `Code sent to ${savedPhoneNumber}. It expires ${formatDateTime(otpState.expiresAt)}. You can resend in ${formatCountdown(
+            otpState.cooldownUntil
+          )}.`
+        : `Code sent to ${savedPhoneNumber}. It expires ${formatDateTime(otpState.expiresAt)}.`;
+    } else {
+      status.textContent = `Send a code to verify ${savedPhoneNumber}.`;
+    }
+
+    if (cooldownActive) {
+      countdownIntervalId = window.setInterval(() => {
+        syncUi();
+      }, 1000);
+    }
+
+    codeRow.style.display = phoneVerified ? "none" : "";
+    actions.style.display = phoneVerified ? "none" : "";
+    sendBtn.disabled = sending || verifying || phoneChanged || !hasSavedPhone || cooldownActive;
+    verifyBtn.disabled =
+      sending ||
+      verifying ||
+      phoneChanged ||
+      !hasSavedPhone ||
+      !otpState?.expiresAt ||
+      !codeInput.value.trim();
+
+    sendBtn.textContent = sending
+      ? "Sending..."
+      : cooldownActive
+        ? `Resend in ${formatCountdown(otpState.cooldownUntil)}`
+        : otpState?.expiresAt
+          ? "Resend code"
+          : "Send code";
+    verifyBtn.textContent = verifying ? "Verifying..." : "Verify phone";
+  };
+
+  sendBtn.addEventListener("click", async () => {
+    error.textContent = "";
+    sending = true;
+    syncUi();
+
+    try {
+      const response = await requestPhoneVerificationOtp();
+      otpState = {
+        expiresAt: response.expiresAt || null,
+        cooldownUntil: response.cooldownUntil || null
+      };
+      codeInput.value = "";
+      showToast("Verification code sent.", "success");
+      syncUi();
+      codeInput.focus({ preventScroll: true });
+    } catch (errorObj) {
+      error.textContent = errorObj.message || "Could not send verification code.";
+
+      if (errorObj?.details?.cooldownUntil) {
+        otpState = {
+          expiresAt: otpState?.expiresAt || null,
+          cooldownUntil: errorObj.details.cooldownUntil
+        };
+      }
+    } finally {
+      sending = false;
+      syncUi();
+    }
+  });
+
+  verifyBtn.addEventListener("click", async () => {
+    error.textContent = "";
+    verifying = true;
+    syncUi();
+
+    try {
+      const updatedUser = await verifyAuthenticatedUserPhoneOtp({
+        code: codeInput.value
+      });
+
+      Object.assign(currentUser, updatedUser);
+      currentUser.phoneVerified = updatedUser.phoneVerified === true;
+      otpState = null;
+      codeInput.value = "";
+      showToast("Phone number verified.", "success");
+    } catch (errorObj) {
+      error.textContent = errorObj.message || "Could not verify the code.";
+    } finally {
+      verifying = false;
+      syncUi();
+    }
+  });
+
+  codeInput.addEventListener("input", () => {
+    error.textContent = "";
+    syncUi();
+  });
+
+  registerViewCleanup(() => {
+    clearCountdown();
+  });
+
+  header.append(title, status);
+  codeLabel.appendChild(codeInput);
+  codeRow.appendChild(codeLabel);
+  actions.append(sendBtn, verifyBtn);
+  wrapper.append(header, codeRow, actions, error);
+  syncUi();
+
+  return {
+    wrapper,
+    syncState: syncUi
+  };
+}
+
 function renderAvatarPreview(container, userLike) {
   if (!container) {
     return;
@@ -360,7 +637,7 @@ function createChannelTab(label, options = {}) {
   return button;
 }
 
-function createPeoplePanel({ currentUser, section }) {
+function createPeoplePanel({ currentUser, section, users = [] }) {
   const panel = createElement("section", {
     className: "profile-card profile-people-panel"
   });
@@ -368,10 +645,6 @@ function createPeoplePanel({ currentUser, section }) {
     className: "profile-people-title",
     text: section === "followers" ? "Followers" : "Following"
   });
-  const users =
-    section === "followers"
-      ? getFollowerUsers(currentUser.id)
-      : getFollowingUsers(currentUser.id);
   const hint = createElement("p", {
     className: "profile-people-hint",
     text:
@@ -510,7 +783,21 @@ function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
       inputmode: "tel"
     }
   });
-  personalPanel.append(personalIntro, usernameField, phoneField, avatarUploadField);
+  const phoneVerificationField = createPhoneVerificationField({
+    currentUser,
+    form,
+    getPendingPhoneNumber: () => phoneField.querySelector("input")?.value || ""
+  });
+  phoneField
+    .querySelector("input")
+    ?.addEventListener("input", phoneVerificationField.syncState);
+  personalPanel.append(
+    personalIntro,
+    usernameField,
+    phoneField,
+    phoneVerificationField.wrapper,
+    avatarUploadField
+  );
 
   const credentialsPanel = createElement("section", {
     className: "profile-edit-panel",

@@ -1,29 +1,44 @@
+import { apiRequest, clearAccessToken, getAccessToken, setAccessToken } from "./apiClient.js";
+import { STORAGE_KEYS } from "../config/storageKeys.js";
+import { storage } from "../storage/storage.js";
 import {
-  createAndStoreUser,
-  findUserByPhoneNumber,
-  findUserByUsername,
+  clearCurrentUser,
   getCurrentUser,
   setCurrentUser,
-  clearCurrentUser,
-  updateUserProfile
+  syncCurrentUserFromApi,
+  updateUserProfileRemote,
+  upsertUser
 } from "./userService.js";
-import {
-  validateUsername,
-  validateTownship,
-  validateExtension,
-  validatePhoneNumber,
-  validateRequiredPhoneNumber,
-  validatePasswordConfirmation,
-  validatePassword,
-  validateCurrentPassword
-} from "../utils/validators.js";
-import { hashPassword } from "../utils/crypto.js";
+import { ensureDirectMessageEncryptionSession } from "./directMessageEncryptionService.js";
+import { resetConversationState } from "./messageService.js";
+import { resetNotificationState } from "./notificationService.js";
+import { resetPostState } from "./postService.js";
+import { resetReportState } from "./reportService.js";
 
-function makeError(code, field, message) {
-  const error = new Error(message);
-  error.code = code;
-  error.field = field;
-  return error;
+function clearClientSessionState() {
+  resetPostState();
+  resetConversationState();
+  resetNotificationState();
+  resetReportState();
+  storage.remove(STORAGE_KEYS.USERS);
+  clearAccessToken();
+  clearCurrentUser();
+}
+
+async function persistAuthenticatedSession({ token, user }) {
+  clearClientSessionState();
+  setAccessToken(token);
+  let normalizedUser = upsertUser(user);
+  setCurrentUser(normalizedUser);
+  normalizedUser = await ensureDirectMessageEncryptionSession({
+    user: normalizedUser,
+    onUserUpdated: (updatedUser) => {
+      const nextUser = upsertUser(updatedUser);
+      setCurrentUser(nextUser);
+      return nextUser;
+    }
+  });
+  return normalizedUser;
 }
 
 export async function registerUser({
@@ -34,75 +49,33 @@ export async function registerUser({
   password,
   confirmPassword
 }) {
-  const safeUsername = validateUsername(username);
-  const safePhoneNumber = validateRequiredPhoneNumber(phoneNumber);
-  const safeTownship = validateTownship(township);
-  const safeExtension = validateExtension(extension);
-  const safePassword = validatePasswordConfirmation(password, confirmPassword);
-  const passwordHash = await hashPassword(safePassword);
-
-  const user = createAndStoreUser({
-    username: safeUsername,
-    phoneNumber: safePhoneNumber,
-    location: {
-      township: safeTownship,
-      extension: safeExtension
-    },
-    passwordHash
+  const response = await apiRequest("/auth/register", {
+    auth: false,
+    method: "POST",
+    body: {
+      username,
+      phoneNumber,
+      township,
+      extension,
+      password,
+      confirmPassword
+    }
   });
 
-  setCurrentUser(user);
-  return user;
-}
-
-function resolveLoginUser(identifier) {
-  const safeIdentifier = typeof identifier === "string" ? identifier.trim() : "";
-  let user = null;
-
-  try {
-    const safeUsername = validateUsername(safeIdentifier);
-    user = findUserByUsername(safeUsername);
-  } catch {
-    user = null;
-  }
-
-  if (user) {
-    return user;
-  }
-
-  try {
-    const safePhoneNumber = validateRequiredPhoneNumber(safeIdentifier);
-    return findUserByPhoneNumber(safePhoneNumber);
-  } catch {
-    return null;
-  }
+  return persistAuthenticatedSession(response);
 }
 
 export async function loginUser({ identifier, password }) {
-  const safeIdentifier = typeof identifier === "string" ? identifier.trim() : "";
-  const safePassword = validatePassword(password);
-  const passwordHash = await hashPassword(safePassword);
+  const response = await apiRequest("/auth/login", {
+    auth: false,
+    method: "POST",
+    body: {
+      identifier,
+      password
+    }
+  });
 
-  if (!safeIdentifier) {
-    throw makeError(
-      "LOGIN_IDENTIFIER_REQUIRED",
-      "identifier",
-      "Enter your username or phone number."
-    );
-  }
-
-  const user = resolveLoginUser(safeIdentifier);
-
-  if (!user) {
-    throw makeError("USER_NOT_FOUND", "identifier", "Account not found.");
-  }
-
-  if (user.passwordHash !== passwordHash) {
-    throw makeError("PASSWORD_INVALID", "password", "Invalid password.");
-  }
-
-  setCurrentUser(user);
-  return user;
+  return persistAuthenticatedSession(response);
 }
 
 export async function updateAuthenticatedUserProfile({
@@ -117,44 +90,71 @@ export async function updateAuthenticatedUserProfile({
   confirmNewPassword
 }) {
   if (!currentUser?.id) {
-    throw makeError("AUTH_REQUIRED", null, "You must be logged in.");
+    const authError = new Error("You must be logged in.");
+    authError.code = "AUTH_REQUIRED";
+    throw authError;
   }
 
-  let passwordHash;
-
-  const wantsPasswordChange = newPassword.trim() || confirmNewPassword.trim();
-
-  if (wantsPasswordChange) {
-    const safeCurrentPassword = validateCurrentPassword(currentPassword);
-    const currentPasswordHash = await hashPassword(safeCurrentPassword);
-
-    if (currentUser.passwordHash !== currentPasswordHash) {
-      throw makeError(
-        "CURRENT_PASSWORD_INVALID",
-        "currentPassword",
-        "Current password is incorrect."
-      );
-    }
-
-    const safeNewPassword = validatePasswordConfirmation(newPassword, confirmNewPassword);
-    passwordHash = await hashPassword(safeNewPassword);
-  }
-
-  return updateUserProfile({
-    userId: currentUser.id,
+  return updateUserProfileRemote({
     username,
     phoneNumber,
     township,
     extension,
-    passwordHash,
-    avatarDataUrl
+    avatarDataUrl,
+    currentPassword,
+    newPassword,
+    confirmNewPassword
   });
+}
+
+export async function requestPhoneVerificationOtp() {
+  return apiRequest("/auth/otp/send", {
+    method: "POST"
+  });
+}
+
+export async function verifyAuthenticatedUserPhoneOtp({ code }) {
+  await apiRequest("/auth/otp/verify", {
+    method: "POST",
+    body: {
+      code
+    }
+  });
+
+  return syncCurrentUserFromApi();
 }
 
 export function getAuthenticatedUser() {
   return getCurrentUser();
 }
 
+export async function resolveAuthenticatedUser() {
+  const currentUser = getCurrentUser();
+
+  if (currentUser?.id) {
+    return currentUser;
+  }
+
+  if (!getAccessToken()) {
+    return null;
+  }
+
+  try {
+    const resolvedUser = await syncCurrentUserFromApi();
+    return ensureDirectMessageEncryptionSession({
+      user: resolvedUser,
+      onUserUpdated: (updatedUser) => {
+        const nextUser = upsertUser(updatedUser);
+        setCurrentUser(nextUser);
+        return nextUser;
+      }
+    });
+  } catch (error) {
+    clearClientSessionState();
+    return null;
+  }
+}
+
 export function logoutUser() {
-  clearCurrentUser();
+  clearClientSessionState();
 }

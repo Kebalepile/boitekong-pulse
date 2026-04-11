@@ -3,6 +3,21 @@ import { AppError } from "./appError.js";
 const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
 const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
+export const MAX_POST_CONTENT_LENGTH = 1000;
+export const MAX_COMMENT_LENGTH = 300;
+export const MAX_REPORT_NOTE_LENGTH = 120;
+export const MAX_VOICE_NOTE_DURATION_MS = 60000;
+const ALLOWED_REACTION_TYPES = new Set(["like", "dislike"]);
+export const REPORT_REASONS = [
+  "Spam",
+  "Harassment or bullying",
+  "Hate speech",
+  "False information",
+  "Violence or threats",
+  "Sexual content",
+  "Scam or fraud",
+  "Other"
+];
 
 const COMMON_WEAK_PASSWORDS = new Set([
   "123456",
@@ -50,6 +65,12 @@ function countSpaces(value) {
 
 function normalizePassword(value) {
   return String(value ?? "").trim();
+}
+
+function normalizePostContent(value) {
+  return String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .trim();
 }
 
 export function normalizeUsername(value) {
@@ -306,6 +327,20 @@ export function validatePasswordConfirmation(password, confirmPassword) {
   return safePassword;
 }
 
+export function validateLoginPassword(value) {
+  const normalized = normalizePassword(value);
+
+  if (!normalized) {
+    throw makeValidationError(
+      "LOGIN_PASSWORD_REQUIRED",
+      "password",
+      "Enter your password."
+    );
+  }
+
+  return normalized;
+}
+
 export function validateCurrentPassword(value) {
   const normalized = normalizePassword(value);
 
@@ -332,11 +367,190 @@ export function validateBoolean(value, field = "value") {
   return value;
 }
 
+export function validatePostContent(value) {
+  const normalized = normalizePostContent(value);
+
+  if (!normalized) {
+    throw makeValidationError("POST_CONTENT_REQUIRED", "content", "Post content is required.");
+  }
+
+  if (normalized.length > MAX_POST_CONTENT_LENGTH) {
+    throw makeValidationError(
+      "POST_CONTENT_TOO_LONG",
+      "content",
+      `Post content must be ${MAX_POST_CONTENT_LENGTH} characters or fewer.`
+    );
+  }
+
+  return normalized;
+}
+
+export function validateCommentContent(value) {
+  const normalized = normalizePostContent(value);
+
+  if (!normalized) {
+    throw makeValidationError("COMMENT_CONTENT_REQUIRED", "content", "Comment text is required.");
+  }
+
+  if (normalized.length > MAX_COMMENT_LENGTH) {
+    throw makeValidationError(
+      "COMMENT_CONTENT_TOO_LONG",
+      "content",
+      `Comment text must be ${MAX_COMMENT_LENGTH} characters or fewer.`
+    );
+  }
+
+  return normalized;
+}
+
+export function validatePostSubmission({ content = "", voiceNote = null }) {
+  const normalizedContent = normalizePostContent(content);
+  const hasText = Boolean(normalizedContent);
+  const hasVoiceNote = Boolean(
+    typeof voiceNote?.audioBase64 === "string" && voiceNote.audioBase64.trim()
+  ) || Boolean(
+    typeof voiceNote?.url === "string" &&
+      /^https?:\/\//i.test(voiceNote.url.trim())
+  );
+
+  if (!hasText && !hasVoiceNote) {
+    throw makeValidationError(
+      "POST_BODY_REQUIRED",
+      "content",
+      "Add text or record a voice note."
+    );
+  }
+
+  return {
+    content: hasText ? validatePostContent(normalizedContent) : "",
+    voiceNote: hasVoiceNote ? voiceNote : null
+  };
+}
+
+export function validateCommentSubmission({ content = "", voiceNote = null }) {
+  const normalizedContent = normalizePostContent(content);
+  const hasText = Boolean(normalizedContent);
+  const hasVoiceNote = Boolean(
+    typeof voiceNote?.audioBase64 === "string" && voiceNote.audioBase64.trim()
+  ) || Boolean(
+    typeof voiceNote?.url === "string" &&
+      /^https?:\/\//i.test(voiceNote.url.trim())
+  );
+
+  if (hasText && hasVoiceNote) {
+    throw makeValidationError(
+      "COMMENT_MODE_CONFLICT",
+      "content",
+      "Choose text or voice note, not both."
+    );
+  }
+
+  if (!hasText && !hasVoiceNote) {
+    throw makeValidationError(
+      "COMMENT_BODY_REQUIRED",
+      "content",
+      "Add text or record a voice note."
+    );
+  }
+
+  return hasText
+    ? {
+        content: validateCommentContent(normalizedContent),
+        voiceNote: null
+      }
+    : {
+        content: "",
+        voiceNote
+      };
+}
+
+export function validateReactionType(value) {
+  const reactionType = typeof value === "string" ? value.trim() : "";
+
+  if (!ALLOWED_REACTION_TYPES.has(reactionType)) {
+    throw makeValidationError("REACTION_INVALID", "reactionType", "Invalid reaction type.");
+  }
+
+  return reactionType;
+}
+
+export function validateReportReason(value) {
+  const reason = collapseWhitespace(String(value ?? ""));
+
+  if (!REPORT_REASONS.includes(reason)) {
+    throw makeValidationError(
+      "REPORT_REASON_INVALID",
+      "reason",
+      "Choose a valid report reason."
+    );
+  }
+
+  return reason;
+}
+
+export function validateReportNote(value, reason) {
+  const note = String(value ?? "").trim();
+
+  if (reason !== "Other") {
+    return "";
+  }
+
+  if (!note) {
+    throw makeValidationError(
+      "REPORT_NOTE_REQUIRED",
+      "note",
+      "Tell us what you are reporting."
+    );
+  }
+
+  if (note.length > MAX_REPORT_NOTE_LENGTH) {
+    throw makeValidationError(
+      "REPORT_NOTE_TOO_LONG",
+      "note",
+      `Report note must be ${MAX_REPORT_NOTE_LENGTH} characters or fewer.`
+    );
+  }
+
+  return note;
+}
+
+export function validateImageUrl(value, field = "image") {
+  const trimmed = String(value ?? "").trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const url = new URL(trimmed);
+
+    if (!["http:", "https:"].includes(url.protocol)) {
+      throw makeValidationError(
+        "IMAGE_URL_INVALID_PROTOCOL",
+        field,
+        "Only http and https image URLs are allowed."
+      );
+    }
+
+    return url.toString();
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    throw makeValidationError("IMAGE_URL_INVALID", field, "Image URL is invalid.");
+  }
+}
+
 export function normalizeAvatarUrl(value) {
   const trimmed = String(value ?? "").trim();
 
   if (!trimmed) {
     return "";
+  }
+
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) {
+    return trimmed;
   }
 
   try {

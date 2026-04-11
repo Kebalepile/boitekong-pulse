@@ -845,6 +845,41 @@
   box-shadow: 0 12px 26px rgba(15, 23, 42, 0.14);
 }
 
+.messages-voice-pending {
+  display: grid;
+  gap: 4px;
+  min-width: 250px;
+  max-width: min(100%, 360px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.messages-voice-pending-own {
+  background: linear-gradient(180deg, #e8eef5 0%, #dbe4ee 58%, #cfd8e3 100%);
+  border-color: #d2dce8;
+}
+
+.messages-voice-pending-text,
+.messages-voice-pending-meta {
+  margin: 0;
+}
+
+.messages-voice-pending-text {
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 700;
+  color: #334155;
+}
+
+.messages-voice-pending-meta {
+  font-size: 10px;
+  line-height: 1.2;
+  color: #64748b;
+}
+
 .messages-voice-speaker-chip {
   position: relative;
   width: 38px;

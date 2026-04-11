@@ -3,6 +3,34 @@ import { locationSchema } from "./shared.js";
 
 const { Schema } = mongoose;
 
+const directMessageEncryptionSchema = new Schema(
+  {
+    version: {
+      type: String,
+      default: ""
+    },
+    algorithm: {
+      type: String,
+      default: ""
+    },
+    keyId: {
+      type: String,
+      default: ""
+    },
+    publicKeyJwk: {
+      type: Schema.Types.Mixed,
+      default: null
+    },
+    updatedAt: {
+      type: Date,
+      default: null
+    }
+  },
+  {
+    _id: false
+  }
+);
+
 const userSchema = new Schema(
   {
     username: {
@@ -45,6 +73,10 @@ const userSchema = new Schema(
     notificationsEnabled: {
       type: Boolean,
       default: true
+    },
+    directMessageEncryption: {
+      type: directMessageEncryptionSchema,
+      default: null
     },
     blockedUserIds: [
       {

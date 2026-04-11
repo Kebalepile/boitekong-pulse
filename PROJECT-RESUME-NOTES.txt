@@ -1,60 +1,65 @@
 BOITEKONG PULSE - PROJECT RESUME NOTES
-Date: 2026-04-06
+Date: 2026-04-11
 
 PURPOSE OF THIS FILE
-- This file is the handoff note for tomorrow.
-- It explains what the app is, what has already been built, what is left, what phase we are in, and what order we should continue in.
-- If Codex has forgotten context tomorrow, resume from this file first.
+- This is the quickest resume point for the next session.
+- It reflects the codebase more accurately than the older "backend scaffold only" description.
+- If Codex loses context later, start from this file first.
 
 PROJECT NAME
 - Boitekong Pulse
 
 PROJECT GOAL
 - Boitekong Pulse is a mobile-first township community web app.
-- It is built for local updates, replies, comments, direct messages, voice notes, notifications, search, and community reporting.
-- The product direction is: local, township-first, voice-friendly, and community-centered.
+- It focuses on local updates, comments, replies, direct messages, voice notes, notifications, search, and reporting.
+- Product direction remains: local, township-first, voice-friendly, and community-centered.
 
 CURRENT APP STATE
-- The app is currently a frontend-first prototype.
-- Data is still stored in browser localStorage.
-- There is no real backend yet.
-- There is no real multi-device sync yet.
-- There is no real push notification backend yet.
-- Reports exist as submission flow only, not as moderator UI.
-- Voice notes exist in the prototype and are currently stored in frontend/browser memory/local storage patterns.
+- The app is no longer just a frontend-only prototype.
+- It is now a hybrid web app with a real backend plus frontend caching.
+- The frontend service layer is already API-backed for:
+  - auth
+  - user profile/settings/search/follow/block
+  - posts/comments/reactions
+  - conversations/messages
+  - notifications
+  - reports
+- Browser localStorage is still used for:
+  - access token/session persistence
+  - cached users/posts/conversations/notifications/reports
+  - hidden-report state
+  - direct-message encryption keys
+  - lightweight UI preferences
+- Backend now includes:
+  - Express app
+  - MongoDB/Mongoose
+  - JWT auth
+  - SMS OTP flow
+  - posts/comments API
+  - conversation/message API
+  - notifications API
+  - reports API
+  - realtime websocket sync at `/api/realtime`
+- Browser notifications exist, but full push-notification infrastructure is NOT done.
+- Voice notes are stored through the current Mongo/base64-binary migration flow for now.
+- Dedicated media/object storage is still a later step.
 
 CURRENT PHASE
-- We are at the end of Phase 6.
-- Phase 6 = frontend feature build + UX polish + cleanup/stabilization.
-- Phase 7 should begin next.
+- We are in late Phase 7.
+- Phase 7 is no longer just "scaffold the backend."
+- Phase 7 now means:
+  - finish migration cleanup
+  - run real end-to-end QA
+  - verify SMS OTP on a real phone
+  - prepare the app for a controlled beta environment
 
-RECOMMENDED VERSION LABELS
-- Current internal status: Phase 6 complete-ish / frontend prototype mature.
-- Next step: Phase 7 = backend foundation.
-- Suggested next milestone labels:
-  - Phase 7 / v0.7 = backend scaffold + auth/users
-  - Phase 8 / v0.8 = posts/comments/messages/notifications API migration
-  - Phase 9 / v0.9 = moderation/report backend + OTP + real media handling
-  - Beta / v1.0-beta = responsive sweep + manual QA + deployment prep
+INTERNAL STATUS SUMMARY
+- UI feature set is mature.
+- Main API slices are wired.
+- Live sync exists.
+- Remaining work is mostly verification, cleanup, and production hardening.
 
-ROOT PROJECT FILES
-- index.html
-- manifest.webmanifest
-- service-worker.js
-- assets/
-- js/
-- styles/
-
-IMPORTANT STORAGE KEYS IN THE CURRENT PROTOTYPE
-- USERS: bp_users
-- POSTS: bp_posts
-- CURRENT_USER: bp_current_user
-- CONVERSATIONS: bp_conversations
-- NOTIFICATIONS: bp_notifications
-- REPORTS: bp_reports
-- CREATE_POST_BRIEF_DISMISSED: bp_create_post_brief_dismissed
-
-MAIN ROUTES CURRENTLY IN USE
+MAIN FRONTEND ROUTES
 - login
 - register
 - feed
@@ -64,426 +69,169 @@ MAIN ROUTES CURRENTLY IN USE
 - search
 - messages
 
-WHAT HAS ALREADY BEEN BUILT
+IMPORTANT STORAGE KEYS STILL IN USE
+- USERS: bp_users
+- POSTS: bp_posts
+- CURRENT_USER: bp_current_user
+- ACCESS_TOKEN: bp_access_token
+- DIRECT_MESSAGE_E2E_KEYS: bp_direct_message_e2e_keys
+- CONVERSATIONS: bp_conversations
+- NOTIFICATIONS: bp_notifications
+- REPORTS: bp_reports
+- CREATE_POST_BRIEF_DISMISSED: bp_create_post_brief_dismissed
 
-1. AUTH
-- Login page exists.
-- Register page exists.
-- Login accepts either username or phone number in one input.
+WHAT IS ALREADY BUILT
+
+1. AUTH + ACCOUNT
+- Register and login use the API.
+- Login accepts username or phone number.
 - Register requires phone number.
-- Register has a 16+ checkbox.
-- Auth screens were redesigned closer to Instagram style:
-  - floating placeholder labels
-  - required-field red state
-  - cleaner CTA/buttons
-  - footer area present
-- Brand copy and naming now use "Boitekong Pulse."
+- Profile update uses the API.
+- Phone verification flow exists in code:
+  - send OTP
+  - verify OTP
+- Direct-message encryption key sync exists.
 
-2. PROFILE
-- Profile view exists.
-- Edit profile exists.
-- User can update:
-  - username
-  - phone number
-  - avatar
-  - township
-  - extension
-  - password
-- Invite button exists in profile:
-  - uses Web Share API when available
-  - clipboard fallback otherwise
+2. PROFILE + COMMUNITY GRAPH
+- Profile page is built.
+- Edit profile is built.
+- Follow/unfollow is API-backed.
+- Followers/following lists are API-backed.
+- DM and notification settings are API-backed.
+- Block/unblock is API-backed.
 
-3. FEED / POSTS
-- Feed exists.
-- Text posts exist.
-- Voice-note posts exist.
-- Create post exists with two modes:
-  - Text update
-  - Voice note
-- Voice-note post length is capped at 1 minute.
-- Create post no longer asks for image/township/extension.
-- B-Point location is taken from the current user profile.
-- Edit post now matches the new post model better:
-  - text-only editing
-  - voice-note posts cannot be edited
-  - voice-note posts must be deleted and reposted
-- Post owners can delete their own posts from the 3-dot menu.
+3. FEED / POSTS / COMMENTS
+- Feed loads from the API.
+- Create post is API-backed.
+- Edit/delete post is API-backed.
+- Post reactions are API-backed.
+- Comments/replies are API-backed.
+- Comment reactions are API-backed.
+- Voice-note posts/comments/replies are supported in the current migration flow.
 
-4. COMMENTS / REPLIES
-- Comments exist.
-- Replies exist.
-- Text comments are capped at 300 characters.
-- Voice-note comments and replies exist.
-- Report action exists for comments and replies.
-- Delete/edit own comment/reply flow exists.
-- Comment/reply voice-note styling has been brought closer to DM styling.
-- Comments and replies support batching / "See more."
+4. DIRECT MESSAGES
+- Conversations load from the API.
+- Direct conversation creation is API-backed.
+- Send/edit/delete message is API-backed.
+- Voice-note messages are supported.
+- Conversation archive/delete-from-inbox behavior is API-backed.
+- Read state is API-backed.
+- End-to-end encryption session handling exists on the frontend.
 
-5. DIRECT MESSAGES / MESSENGER
-- Messages screen exists.
-- User discovery in Messages exists.
-- Search people by name/location exists in Messages.
-- DM toggle exists:
-  - enable/disable direct messages
-- Block / unblock exists from conversation actions.
-- Sending rules exist:
-  - if I disabled DMs, I cannot send
-  - if the other user disabled DMs, I cannot send
-  - if blocked either way, messaging is blocked
-- Text messages exist.
-- Voice-note messages exist.
-- DM voice notes are capped at 1 minute.
-- Voice-note UX in DMs has been heavily polished:
-  - recorder state
-  - preview state
-  - posted bubble state
-  - playback speed retained
-- Message edit/delete behavior exists.
-- Privacy-friendly DM previews were added:
-  - inbox preview does not reveal deleted content
-  - notifications do not reveal message body text
+5. NOTIFICATIONS
+- Notification list is API-backed.
+- Mark one/all as read is API-backed.
+- Conversation notifications can be cleared/read.
+- Browser notifications are wired for supported browsers.
+- Notification click routing is wired in the app.
 
-6. NOTIFICATIONS
-- In-app notifications exist.
-- Notification toggle exists:
-  - user can turn notifications on/off
-- Desktop/browser notifications were added for supported browsers.
-- Notification click behavior is wired:
-  - DM -> opens conversation
-  - follow -> opens user preview
-  - comment -> opens relevant post/comments
-  - reply -> opens relevant post/comments
-- Follow notifications exist.
-- Comment-on-post notifications exist.
-- Reply-to-comment notifications exist.
-- Notifications respect hidden reported content for the reporting user.
+6. SEARCH
+- User search is API-backed.
+- Post search is API-backed.
+- Search screens still use cache as a safe fallback if refresh fails.
 
-7. SEARCH
-- Search screen exists.
-- User search exists.
-- Post search exists.
-- Search batching / "See more" exists.
+7. REPORTING
+- Report submission is API-backed.
+- Duplicate report protection exists.
+- Hide-for-me flow exists.
+- Hidden reported content is filtered in feed/comments/notifications for the reporting user.
+- Moderator UI is still postponed.
 
-8. REPORTING
-- Post report flow exists.
-- Comment/reply report flow exists.
-- Preset reasons exist.
-- "Other" note is limited to 120 characters.
-- Duplicate reports from the same user on the same target are blocked.
-- Optional "hide for me" exists:
-  - hidden reported post/comment is removed from that reporter's view
-  - related notifications are also suppressed for that same user
-- Moderator UI is NOT part of the frontend plan right now.
+8. LIVE SYNC
+- Polling plus websocket live sync exists.
+- Feed can opt into live post refresh.
+- Messages and notifications can refresh from realtime events.
 
-9. UI / POLISH / BRAND
-- Brand renamed from "Boitekong Now" to "Boitekong Pulse."
-- App icon / logo now use the shared asset in assets/app-icon.png.
-- Login showcase and auth pages have been polished heavily.
-- Side drawer cleanup is done:
-  - removed username/avatar/B-Point block
-  - install button added
-  - contact overflow fixed
-- Global scrollbar, side drawer scrollbar, and comments panel scrollbar were hidden.
-- Top navbar now touches the top and side edges even on larger viewports.
+9. BACKEND TOOLING
+- `npm run dev:api`
+- `npm run start:api`
+- `npm run check:api`
+- `npm run db:init`
+- `npm run check:db`
+- `npm run cleanup:legacy-voice-notes`
 
-IMPORTANT PRODUCT DECISIONS ALREADY MADE
-- Create post no longer uses manual township/extension/image fields.
-- B-Point comes from user profile.
-- Voice-note posts cannot be edited.
-- Voice-note posts can be deleted.
-- Reports are submission-only for now.
-- Moderator tools are postponed until backend + moderator accounts.
-- Responsive final sweep is postponed until later beta prep.
-- Legal/footer content pages and install-button content hookup are postponed.
+WHAT WAS CLEANED UP TODAY
+- Removed old unused browser-only user mutation leftovers from `js/services/userService.js`.
+- Removed the old unused frontend `js/models/userModel.js`.
+- Added `.env.example` for repeatable setup.
+- Added a production safety check so the API refuses to boot in `production` with the placeholder JWT secret.
+- Updated docs so they no longer describe the app as "backend scaffold only."
 
-KNOWN FRONTEND ITEMS LEFT BEFORE OR DURING BACKEND
-- Manual browser QA pass across all main flows.
-- Final responsive sweep across all viewport sizes later.
-- Final visual consistency pass if needed:
-  - voice-note UIs across feed/comments/replies/DMs
-  - auth edge-state polish
-  - large-screen layout polish if anything still looks off
-- Footer legal items need actual content/pages later.
-- Install button needs full hookup/content later.
-- PWA caching/icon/install behavior should be retested after backend integration.
+TOMORROW'S MAIN TASKS
+- Run end-to-end manual QA in the browser against the real backend.
+- Test cellphone SMS OTP on a real device/provider path.
+- Fix any integration bugs found during QA before calling the app beta-ready.
 
-WHAT DOES NOT NEED TO BE BUILT IN FRONTEND RIGHT NOW
+RECOMMENDED QA ORDER
+1. Register
+2. Login
+3. Edit profile
+4. Send OTP
+5. Verify OTP
+6. Create text post
+7. Create voice-note post
+8. Edit/delete eligible post
+9. Add comment/reply
+10. React to post/comment
+11. Search users/posts
+12. Follow/unfollow
+13. Block/unblock
+14. DM text
+15. DM voice note
+16. Edit/delete message
+17. Notification open/read flows
+18. Report post/comment with and without hide-for-me
+19. Multi-tab or multi-device live sync sanity check
+
+WHAT IS STILL LEFT BEFORE A REAL BETA GO-LIVE
+- Real end-to-end QA needs to pass.
+- Real SMS OTP needs to pass with the live provider/device flow.
+- Production environment values must be set correctly:
+  - JWT secret
+  - CORS origin
+  - Mongo connection
+  - SMS API key
+- MongoDB Atlas/network access must be confirmed from the deployment environment.
+- Backup and restore expectations should be defined for Mongo.
+- Monitoring/logging should be in place for the deployed API.
+- Auth and OTP abuse controls should be confirmed before public exposure.
+- PWA/service-worker behavior should be retested after backend deployment.
+- Legal/privacy/minimum public-facing product copy still needs final content if this will be publicly accessible.
+
+BETA GO-LIVE DECISION RULE
+- If browser QA passes tomorrow, that means the product flow is in a strong place.
+- It does NOT automatically mean "production beta live" is fully safe.
+- For a controlled beta, the app is close.
+- For a public production beta, also confirm:
+  - deploy environment works
+  - secrets are production-safe
+  - CORS is locked correctly
+  - SMS OTP works live
+  - monitoring exists
+  - basic abuse/rate-limit protection is covered
+  - rollback/recovery plan exists
+
+WHAT IS NOT IN SCOPE RIGHT NOW
 - Moderator dashboard
 - Moderator decision tools
-- Report review UI in the app
-- Ban/remove-post admin tooling in the frontend
-- Full legal pages/content
-- Final install experience content
-- Full responsive perfection before backend
+- Full admin tooling
+- Dedicated object storage/media CDN
+- Full web push notification system
+- Full legal/install/marketing content
+- Final pixel-perfect responsive pass on every viewport
 
-BACKEND PHASE - WHAT WE SHOULD BUILD NEXT
+MOST LIKELY NEXT MILESTONE LABELS
+- v0.7.x = migration cleanup + QA + OTP verification
+- v0.8 = controlled beta hardening + deployment prep
+- v1.0-beta = live beta after environment + ops + QA gates are satisfied
 
-PHASE 7 GOAL
-- Move from localStorage prototype to real backend foundation.
-- Keep current UX and current frontend data flows where possible.
-- Replace localStorage service internals with API-backed versions over time.
-
-RECOMMENDED BACKEND STACK
-- Node.js
-- Express
-- MongoDB
-- Mongoose
-- JWT or session-based auth
-- SMS OTP provider later for phone verification
-- Cloud storage / media service for avatars, images, and voice notes
-
-WHY MEDIA STORAGE MATTERS
-- We should NOT keep voice notes and image payloads as base64 in the long-term backend.
-- Backend should store file metadata + URLs, not giant data URLs in documents.
-- Use object storage or media hosting for:
-  - profile avatars
-  - post images if reintroduced or supported later
-  - voice notes in posts
-  - voice notes in comments/replies
-  - voice notes in direct messages
-
-RECOMMENDED BACKEND DATA MODEL DIRECTION
-
-1. USERS
-- id
-- username
-- phoneNumber
-- passwordHash
-- avatarUrl
-- location:
-  - township
-  - extension
-- directMessagesEnabled
-- notificationsEnabled
-- blockedUserIds
-- createdAt
-- updatedAt
-- later:
-  - phoneVerified
-  - lastSeen
-  - roles (user/moderator/admin)
-
-2. POSTS
-- id
-- userId
-- content
-- imageUrl or null
-- voiceNote object or media reference
-- location:
-  - township
-  - extension
-- reactions
-- createdAt
-- updatedAt
-
-3. COMMENTS
-OPTION A
-- keep comments embedded inside posts like the current prototype
-
-OPTION B
-- separate collection for comments/replies
-- recommended if scale and moderation complexity are expected
-
-RECOMMENDATION
-- Use a separate comments collection if possible:
-  - id
-  - postId
-  - parentId
-  - userId
-  - content
-  - voiceNote
-  - reactions
-  - createdAt
-  - updatedAt
-  - deleted state if needed later
-
-4. CONVERSATIONS
-- id
-- participantIds[]
-- archivedBy[]
-- createdAt
-- updatedAt
-
-5. MESSAGES
-- id
-- conversationId
-- senderId
-- text
-- voiceNote
-- createdAt
-- updatedAt
-- deletedForEveryone flag or status
-- seenBy / seenAt
-
-6. NOTIFICATIONS
-- id
-- userId
-- actorUserId
-- type
-- postId
-- commentId
-- conversationId
-- messageId
-- read
-- createdAt
-
-7. REPORTS
-- id
-- reporterUserId
-- targetType
-- targetId
-- reason
-- note
-- hideForReporter
-- createdAt
-- later moderation fields:
-  - status
-  - reviewerId
-  - decision
-  - decisionNote
-
-8. OTP / PHONE VERIFICATION
-- id
-- userId or phoneNumber
-- otpCodeHash
-- expiresAt
-- verifiedAt
-- attempt count / cooldown metadata
-
-BACKEND IMPLEMENTATION ORDER
-
-STEP 1
-- Scaffold backend app
-- config
-- environment variables
-- Mongo connection
-- health route
-- auth base routes
-
-STEP 2
-- Users/auth
-- register
-- login
-- password hashing
-- username uniqueness
-- phone uniqueness
-- current user endpoint
-
-STEP 3
-- Profile update endpoints
-- avatar upload handling
-- location update
-- DM toggle
-- notifications toggle
-- block/unblock
-
-STEP 4
-- Posts
-- create post
-- edit text post
-- delete post
-- get feed
-- get posts by user
-- reactions
-
-STEP 5
-- Comments/replies
-- add comment
-- add reply
-- edit own comment
-- delete own comment
-- reactions
-
-STEP 6
-- Messages
-- list conversations
-- open/create conversation
-- send text
-- send voice note
-- delete/edit where allowed
-- seen state
-- block/DM-disabled checks on backend too
-
-STEP 7
-- Notifications
-- notification generation on backend
-- read/unread state
-- clear/read endpoints
-- optional real-time later
-
-STEP 8
-- Reports
-- create report endpoint
-- hide-for-me logic
-- moderation-readiness storage
-- no moderator frontend yet
-
-STEP 9
-- Phone OTP verification
-- SMS provider hookup
-- verify phone flow
-- resend / rate limit
-
-STEP 10
-- Replace frontend localStorage service internals with API calls
-- keep view/component APIs stable where possible
-
-IMPORTANT FRONTEND-TO-BACKEND MIGRATION RULE
-- Do not rewrite the whole UI.
-- Keep the views/components mostly intact.
-- Replace service internals first:
-  - authService.js
-  - userService.js
-  - postService.js
-  - messageService.js
-  - notificationService.js
-  - reportService.js
-
-THIS WILL MAKE THE TRANSITION CLEANER
-- UI should continue calling the same service functions where possible.
-- Internally, those services will move from localStorage to fetch/API.
-
-WHAT TO DO TOMORROW - RECOMMENDED ORDER
-
-OPTION A - BEST RECOMMENDATION
-1. Read this file first.
-2. Do a short manual QA pass in browser:
-   - login
-   - register
-   - profile/edit profile
-   - create post
-   - edit text post
-   - delete post
-   - comments/replies
-   - DM text
-   - DM voice note
-   - notifications
-   - search
-3. If no serious frontend bugs show up, start backend scaffold immediately.
-
-OPTION B - IF ONE MORE FRONTEND BUG SHOWS UP
-1. Fix only that bug.
-2. Do not add new features.
-3. Then move to backend.
-
-THINGS WE SHOULD NOT WASTE TIME ON TOMORROW
-- New major frontend features
-- Moderator frontend
-- Extra cosmetic experiments
-- Full responsive perfection before backend
-- Hooking footer legal pages before backend
-
-HOW TO RESUME WITH CODEX TOMORROW
-- Tell Codex:
-  "Resume from PROJECT-RESUME-NOTES.txt and continue from Phase 7."
-
-GOOD NEXT PROMPTS FOR TOMORROW
-- "Resume from PROJECT-RESUME-NOTES.txt and scaffold the backend."
-- "Resume from PROJECT-RESUME-NOTES.txt and plan the backend models and routes."
-- "Resume from PROJECT-RESUME-NOTES.txt and start auth/users backend first."
-- "Resume from PROJECT-RESUME-NOTES.txt and do a short frontend QA checklist first."
+GOOD NEXT PROMPTS
+- "Resume from PROJECT-RESUME-NOTES.txt and help me run the QA checklist."
+- "Resume from PROJECT-RESUME-NOTES.txt and debug the OTP flow."
+- "Resume from PROJECT-RESUME-NOTES.txt and harden the app for beta deploy."
+- "Resume from PROJECT-RESUME-NOTES.txt and update the deployment checklist."
 
 FINAL RECOMMENDATION
-- Frontend is mature enough to stop feature work for now.
-- The right next move is backend foundation.
-- Tomorrow, begin with a brief QA sweep and then start Phase 7.
+- Tomorrow should focus on QA plus real OTP verification, not new features.
+- If those pass, the app is close to controlled beta.
+- Do not treat "feature complete" as the same thing as "production safe."

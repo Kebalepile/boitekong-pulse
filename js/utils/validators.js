@@ -6,6 +6,7 @@ export const MAX_POST_CONTENT_LENGTH = 1000;
 export const MAX_COMMENT_LENGTH = 300;
 export const MAX_REPORT_NOTE_LENGTH = 120;
 const ALLOWED_AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_REACTION_TYPES = new Set(["like", "dislike"]);
 
 const COMMON_WEAK_PASSWORDS = new Set([
   "123456",
@@ -46,6 +47,13 @@ function makeError(code, field, message) {
   error.code = code;
   error.field = field;
   return error;
+}
+
+function hasVoiceNoteContent(voiceNote) {
+  return Boolean(
+    (typeof voiceNote?.audioBase64 === "string" && voiceNote.audioBase64.trim()) ||
+      (typeof voiceNote?.url === "string" && /^https?:\/\//i.test(voiceNote.url.trim()))
+  );
 }
 
 export function normalizeUsername(value) {
@@ -359,7 +367,7 @@ export function validateRequiredPhoneNumber(value) {
 }
 
 export function validatePostSubmission({ content = "", voiceNote = null }) {
-  const hasVoiceNote = Boolean(voiceNote?.dataUrl);
+  const hasVoiceNote = hasVoiceNoteContent(voiceNote);
   const normalizedContent = normalizePostContent(content || "");
   const hasText = Boolean(normalizedContent);
 
@@ -378,7 +386,7 @@ export function validatePostSubmission({ content = "", voiceNote = null }) {
 }
 
 export function validateCommentSubmission({ content = "", voiceNote = null, mode = null }) {
-  const hasVoiceNote = Boolean(voiceNote?.dataUrl);
+  const hasVoiceNote = hasVoiceNoteContent(voiceNote);
   const normalizedContent = normalizePostContent(content || "");
   const hasText = Boolean(normalizedContent);
 
@@ -429,6 +437,16 @@ export function validateCommentSubmission({ content = "", voiceNote = null, mode
         content: "",
         voiceNote
       };
+}
+
+export function validateReactionType(value) {
+  const reactionType = typeof value === "string" ? value.trim() : "";
+
+  if (!ALLOWED_REACTION_TYPES.has(reactionType)) {
+    throw makeError("REACTION_INVALID", "reactionType", "Invalid reaction type.");
+  }
+
+  return reactionType;
 }
 
 export function validateImageUrl(value) {

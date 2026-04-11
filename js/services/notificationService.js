@@ -1,8 +1,28 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
+import { apiRequest } from "./apiClient.js";
 import { getHiddenTargetIdsForUser } from "./reportService.js";
+import { upsertUsers } from "./userService.js";
 
 let notificationOpenHandler = null;
+const loadedNotificationUserIds = new Set();
+const notificationListeners = new Set();
+let notificationStateVersion = 0;
+
+function createQueryString(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+
+    query.set(key, String(value));
+  });
+
+  const serialized = query.toString();
+  return serialized ? `?${serialized}` : "";
+}
 
 function normalizeNotificationRecord(notification = {}) {
   return {
@@ -21,166 +41,28 @@ function normalizeNotificationRecord(notification = {}) {
       typeof notification.createdAt === "string" && notification.createdAt
         ? notification.createdAt
         : new Date().toISOString(),
+    updatedAt:
+      typeof notification.updatedAt === "string" && notification.updatedAt
+        ? notification.updatedAt
+        : null,
     read: notification.read === true
   };
 }
 
-export function getNotifications() {
-  const notifications = storage.get(STORAGE_KEYS.NOTIFICATIONS, []);
+function normalizeNotifications(notifications) {
   return Array.isArray(notifications)
     ? notifications.map(normalizeNotificationRecord)
     : [];
 }
 
-export function saveNotifications(notifications) {
-  storage.set(STORAGE_KEYS.NOTIFICATIONS, notifications);
-}
-
-export function createNotification(notification) {
-  const targetUser = findNotificationUser(notification?.userId);
-
-  if (targetUser && targetUser.notificationsEnabled === false) {
-    return null;
-  }
-
-  const notifications = getNotifications();
-  const nextNotification = normalizeNotificationRecord({
-    id: crypto.randomUUID(),
-    ...notification,
-    createdAt: new Date().toISOString(),
-    read: false
-  });
-
-  notifications.push(nextNotification);
-  saveNotifications(notifications);
-  showBrowserNotification(nextNotification);
-
-  return nextNotification;
-}
-
-export function getNotificationsForUser(userId) {
-  return getNotifications()
-    .filter(
-      (notification) =>
-        notification.userId === userId &&
-        !isNotificationHiddenForUser(notification, userId)
-    )
-    .sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt));
-}
-
-export function getUnreadNotificationCount(userId) {
-  return getNotificationsForUser(userId).length;
-}
-
-export function removeNotification(notificationId) {
-  const notifications = getNotifications();
-  const nextNotifications = notifications.filter(
-    (notification) => notification.id !== notificationId
-  );
-
-  if (nextNotifications.length === notifications.length) {
-    return null;
-  }
-
-  saveNotifications(nextNotifications);
-  return nextNotifications;
-}
-
-export function clearNotificationsForUser(userId) {
-  const notifications = getNotifications();
-  const nextNotifications = notifications.filter((notification) => notification.userId !== userId);
-
-  if (nextNotifications.length === notifications.length) {
-    return notifications;
-  }
-
-  saveNotifications(nextNotifications);
-  return nextNotifications;
-}
-
-export function clearConversationNotifications({ userId, conversationId }) {
-  if (!userId || !conversationId) {
-    return getNotifications();
-  }
-
-  const notifications = getNotifications();
-  const nextNotifications = notifications.filter(
-    (notification) =>
-      notification.userId !== userId || notification.conversationId !== conversationId
-  );
-
-  if (nextNotifications.length === notifications.length) {
-    return notifications;
-  }
-
-  saveNotifications(nextNotifications);
-  return nextNotifications;
-}
-
-export function clearNotificationsForReportedTarget({ userId, targetType, targetId }) {
-  const safeUserId = typeof userId === "string" ? userId.trim() : "";
-  const safeTargetId = typeof targetId === "string" ? targetId.trim() : "";
-  const safeTargetType = targetType === "comment" ? "comment" : "post";
-
-  if (!safeUserId || !safeTargetId) {
-    return getNotifications();
-  }
-
-  const notifications = getNotifications();
-  const nextNotifications = notifications.filter((notification) => {
-    if (notification.userId !== safeUserId) {
-      return true;
+function emitNotificationChange(notifications) {
+  notificationListeners.forEach((listener) => {
+    try {
+      listener(notifications);
+    } catch {
+      // Ignore listener errors so storage updates continue.
     }
-
-    if (safeTargetType === "post") {
-      return notification.postId !== safeTargetId;
-    }
-
-    return notification.commentId !== safeTargetId;
   });
-
-  if (nextNotifications.length === notifications.length) {
-    return notifications;
-  }
-
-  saveNotifications(nextNotifications);
-  return nextNotifications;
-}
-
-export async function ensureBrowserNotificationPermission() {
-  const status = getBrowserNotificationPermissionStatus();
-
-  if (!status.supported || status.permission === "granted" || status.permission === "denied") {
-    return status;
-  }
-
-  const permission = await Notification.requestPermission();
-  return {
-    supported: true,
-    permission
-  };
-}
-
-export function registerNotificationOpenHandler(handler) {
-  notificationOpenHandler = typeof handler === "function" ? handler : null;
-}
-
-export function getBrowserNotificationPermissionStatus() {
-  if (!isBrowserNotificationSupported()) {
-    return {
-      supported: false,
-      permission: "unsupported"
-    };
-  }
-
-  return {
-    supported: true,
-    permission: Notification.permission
-  };
-}
-
-function isBrowserNotificationSupported() {
-  return typeof window !== "undefined" && typeof Notification !== "undefined";
 }
 
 function getCurrentUserId() {
@@ -200,6 +82,34 @@ function findNotificationUser(userId) {
   }
 
   return users.find((user) => user?.id === userId) || null;
+}
+
+function replaceNotificationsForUser(userId, notifications) {
+  const existingNotifications = getNotifications();
+  const nextNotifications = [
+    ...existingNotifications.filter((notification) => notification.userId !== userId),
+    ...normalizeNotifications(notifications)
+  ];
+
+  saveNotifications(nextNotifications);
+  return nextNotifications;
+}
+
+function updateNotificationsInStore(updater) {
+  const currentNotifications = getNotifications();
+  const nextNotifications = updater(currentNotifications.map(normalizeNotificationRecord));
+  saveNotifications(nextNotifications);
+  return nextNotifications;
+}
+
+function syncNotificationActors(notifications = []) {
+  const actorUsers = notifications
+    .map((notification) => notification?.actorUser || null)
+    .filter(Boolean);
+
+  if (actorUsers.length > 0) {
+    upsertUsers(actorUsers);
+  }
 }
 
 function findActorUsername(actorUserId) {
@@ -242,10 +152,28 @@ function getBrowserNotificationCopy(notification) {
     };
   }
 
+  if (notification.type === "post_reaction") {
+    return {
+      title: "Post reaction",
+      body: `${actorName} reacted to your post`
+    };
+  }
+
+  if (notification.type === "comment_reaction") {
+    return {
+      title: "Comment reaction",
+      body: `${actorName} reacted to your comment`
+    };
+  }
+
   return {
     title: notification.title || "Notification",
     body: notification.text || "Open the app to view more."
   };
+}
+
+function isBrowserNotificationSupported() {
+  return typeof window !== "undefined" && typeof Notification !== "undefined";
 }
 
 function showBrowserNotification(notification) {
@@ -262,9 +190,10 @@ function showBrowserNotification(notification) {
   const { title, body } = getBrowserNotificationCopy(notification);
   const browserNotification = new Notification(title, {
     body,
-    tag: notification.type === "dm" && notification.conversationId
-      ? `dm-${notification.conversationId}`
-      : notification.id
+    tag:
+      notification.type === "dm" && notification.conversationId
+        ? `dm-${notification.conversationId}`
+        : notification.id
   });
 
   browserNotification.onclick = () => {
@@ -272,7 +201,7 @@ function showBrowserNotification(notification) {
 
     try {
       window.focus();
-    } catch (error) {
+    } catch {
       // Ignore focus failures and continue opening in-app flow.
     }
 
@@ -282,6 +211,303 @@ function showBrowserNotification(notification) {
   };
 
   return browserNotification;
+}
+
+function maybeShowNewBrowserNotifications({
+  currentUserId,
+  previousNotifications,
+  nextNotifications
+}) {
+  if (!loadedNotificationUserIds.has(currentUserId)) {
+    return;
+  }
+
+  const previousUnreadIds = new Set(
+    previousNotifications
+      .filter((notification) => notification.userId === currentUserId && notification.read !== true)
+      .map((notification) => notification.id)
+  );
+
+  nextNotifications.forEach((notification) => {
+    if (
+      notification.userId === currentUserId &&
+      notification.read !== true &&
+      !previousUnreadIds.has(notification.id)
+    ) {
+      showBrowserNotification(notification);
+    }
+  });
+}
+
+export function getNotifications() {
+  const notifications = storage.get(STORAGE_KEYS.NOTIFICATIONS, []);
+  return normalizeNotifications(notifications);
+}
+
+export function saveNotifications(notifications) {
+  const nextNotifications = normalizeNotifications(notifications);
+  const previousNotifications = normalizeNotifications(
+    storage.get(STORAGE_KEYS.NOTIFICATIONS, [])
+  );
+
+  if (JSON.stringify(previousNotifications) === JSON.stringify(nextNotifications)) {
+    return nextNotifications;
+  }
+
+  storage.set(STORAGE_KEYS.NOTIFICATIONS, nextNotifications);
+  emitNotificationChange(nextNotifications);
+  return nextNotifications;
+}
+
+export function subscribeToNotificationChanges(listener) {
+  if (typeof listener !== "function") {
+    return () => {};
+  }
+
+  notificationListeners.add(listener);
+
+  return () => {
+    notificationListeners.delete(listener);
+  };
+}
+
+export function resetNotificationState() {
+  notificationStateVersion += 1;
+  notificationOpenHandler = null;
+  loadedNotificationUserIds.clear();
+  storage.remove(STORAGE_KEYS.NOTIFICATIONS);
+}
+
+export async function loadNotifications({
+  currentUserId = getCurrentUserId(),
+  force = false,
+  limit
+} = {}) {
+  if (!currentUserId) {
+    return [];
+  }
+
+  if (!force && loadedNotificationUserIds.has(currentUserId)) {
+    return getNotificationsForUser(currentUserId);
+  }
+
+  const requestStateVersion = notificationStateVersion;
+  const requestUserId = currentUserId;
+  const previousNotifications = getNotifications();
+  const response = await apiRequest(
+    `/notifications${createQueryString({
+      limit
+    })}`
+  );
+
+  if (requestStateVersion !== notificationStateVersion) {
+    return getNotificationsForUser(requestUserId);
+  }
+
+  const notifications = normalizeNotifications(response.notifications || []);
+
+  syncNotificationActors(response.notifications || []);
+  replaceNotificationsForUser(requestUserId, notifications);
+  maybeShowNewBrowserNotifications({
+    currentUserId: requestUserId,
+    previousNotifications,
+    nextNotifications: notifications
+  });
+  loadedNotificationUserIds.add(requestUserId);
+
+  return getNotificationsForUser(requestUserId);
+}
+
+export async function ensureNotificationsLoaded(currentUserId) {
+  return loadNotifications({
+    currentUserId,
+    force: false
+  });
+}
+
+export function getNotificationsForUser(userId) {
+  return getNotifications()
+    .filter(
+      (notification) =>
+        notification.userId === userId &&
+        !isNotificationHiddenForUser(notification, userId)
+    )
+    .sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt));
+}
+
+export function getUnreadNotificationCount(userId) {
+  return getNotificationsForUser(userId).filter((notification) => notification.read !== true)
+    .length;
+}
+
+export async function markNotificationRead(notificationId) {
+  const safeNotificationId =
+    typeof notificationId === "string" ? notificationId.trim() : "";
+
+  if (!safeNotificationId) {
+    return null;
+  }
+
+  let cachedNotification = null;
+
+  updateNotificationsInStore((notifications) =>
+    notifications.map((notification) => {
+      if (notification.id !== safeNotificationId) {
+        return notification;
+      }
+
+      cachedNotification = {
+        ...notification,
+        read: true
+      };
+
+      return cachedNotification;
+    })
+  );
+
+  try {
+    const response = await apiRequest(
+      `/notifications/${encodeURIComponent(safeNotificationId)}/read`,
+      {
+        method: "PATCH"
+      }
+    );
+
+    if (response.notification) {
+      syncNotificationActors([response.notification]);
+      updateNotificationsInStore((notifications) =>
+        notifications.map((notification) =>
+          notification.id === safeNotificationId
+            ? normalizeNotificationRecord(response.notification)
+            : notification
+        )
+      );
+      return normalizeNotificationRecord(response.notification);
+    }
+  } catch {
+    // Keep the optimistic read state locally even if the request fails.
+  }
+
+  return cachedNotification;
+}
+
+export async function markAllNotificationsRead(userId = getCurrentUserId()) {
+  if (!userId) {
+    return getNotifications();
+  }
+
+  const nextNotifications = updateNotificationsInStore((notifications) =>
+    notifications.map((notification) =>
+      notification.userId === userId
+        ? {
+            ...notification,
+            read: true
+          }
+        : notification
+    )
+  );
+
+  try {
+    await apiRequest("/notifications/read-all", {
+      method: "PATCH"
+    });
+  } catch {
+    // Keep the optimistic read state locally even if the request fails.
+  }
+
+  return nextNotifications;
+}
+
+export async function clearConversationNotifications({
+  userId = getCurrentUserId(),
+  conversationId
+}) {
+  const safeConversationId =
+    typeof conversationId === "string" ? conversationId.trim() : "";
+
+  if (!userId || !safeConversationId) {
+    return getNotifications();
+  }
+
+  const nextNotifications = updateNotificationsInStore((notifications) =>
+    notifications.map((notification) =>
+      notification.userId === userId && notification.conversationId === safeConversationId
+        ? {
+            ...notification,
+            read: true
+          }
+        : notification
+    )
+  );
+
+  try {
+    await apiRequest(
+      `/notifications/conversations/${encodeURIComponent(safeConversationId)}/read`,
+      {
+        method: "PATCH"
+      }
+    );
+  } catch {
+    // Keep the optimistic read state locally even if the request fails.
+  }
+
+  return nextNotifications;
+}
+
+export function clearNotificationsForReportedTarget({ userId, targetType, targetId }) {
+  const safeUserId = typeof userId === "string" ? userId.trim() : "";
+  const safeTargetId = typeof targetId === "string" ? targetId.trim() : "";
+  const safeTargetType = targetType === "comment" ? "comment" : "post";
+
+  if (!safeUserId || !safeTargetId) {
+    return getNotifications();
+  }
+
+  return updateNotificationsInStore((notifications) =>
+    notifications.filter((notification) => {
+      if (notification.userId !== safeUserId) {
+        return true;
+      }
+
+      if (safeTargetType === "post") {
+        return notification.postId !== safeTargetId;
+      }
+
+      return notification.commentId !== safeTargetId;
+    })
+  );
+}
+
+export async function ensureBrowserNotificationPermission() {
+  const status = getBrowserNotificationPermissionStatus();
+
+  if (!status.supported || status.permission === "granted" || status.permission === "denied") {
+    return status;
+  }
+
+  const permission = await Notification.requestPermission();
+  return {
+    supported: true,
+    permission
+  };
+}
+
+export function registerNotificationOpenHandler(handler) {
+  notificationOpenHandler = typeof handler === "function" ? handler : null;
+}
+
+export function getBrowserNotificationPermissionStatus() {
+  if (!isBrowserNotificationSupported()) {
+    return {
+      supported: false,
+      permission: "unsupported"
+    };
+  }
+
+  return {
+    supported: true,
+    permission: Notification.permission
+  };
 }
 
 function isNotificationHiddenForUser(notification, userId) {

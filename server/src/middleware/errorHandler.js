@@ -51,6 +51,23 @@ function toErrorPayload(error) {
     };
   }
 
+  if (
+    error?.type === "entity.too.large" ||
+    error?.status === 413 ||
+    error?.statusCode === 413
+  ) {
+    return {
+      statusCode: 413,
+      body: {
+        error: {
+          code: "PAYLOAD_TOO_LARGE",
+          message:
+            "That upload is too large for the current request. Try a smaller photo or a shorter voice note."
+        }
+      }
+    };
+  }
+
   return {
     statusCode: 500,
     body: {

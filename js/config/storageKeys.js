@@ -2,6 +2,8 @@ export const STORAGE_KEYS = {
   USERS: "bp_users",
   POSTS: "bp_posts",
   CURRENT_USER: "bp_current_user",
+  ACCESS_TOKEN: "bp_access_token",
+  DIRECT_MESSAGE_E2E_KEYS: "bp_direct_message_e2e_keys",
   CONVERSATIONS: "bp_conversations",
   NOTIFICATIONS: "bp_notifications",
   REPORTS: "bp_reports",

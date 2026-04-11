@@ -25,9 +25,27 @@ function parseOriginList(value) {
     .filter(Boolean);
 }
 
+function parseCsvList(value) {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function readNumberEnv(name, fallback) {
   const value = Number.parseInt(readEnv(name, String(fallback)), 10);
   return Number.isNaN(value) ? fallback : value;
+}
+
+function readTimeZoneEnv(name, fallback) {
+  const value = readEnv(name, fallback);
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return value;
+  } catch {
+    return fallback;
+  }
 }
 
 function isLocalMongoHost(hostname = "") {
@@ -108,6 +126,20 @@ function sanitizeMongoUri(uri) {
   }
 }
 
+function validateRuntimeEnv(config) {
+  if (config.nodeEnv !== "production") {
+    return config;
+  }
+
+  if (!config.jwtSecret || config.jwtSecret === "change-this-before-production") {
+    throw new Error(
+      "JWT_SECRET must be set to a strong non-default value before starting the API in production."
+    );
+  }
+
+  return config;
+}
+
 const port = Number.parseInt(readEnv("PORT", "4000"), 10);
 const mongodbDatabaseName = readEnvFromNames(
   ["MONGODB_DATABASE_NAME", "MONGODB_DB_NAME"],
@@ -129,6 +161,9 @@ const mongodbAppName = readEnvFromNames(
   ["MONGODB_APP_NAME", "MONGODB_ATLAS_APP_NAME"],
   "BoitekongPulse"
 );
+const mongodbDnsServers = parseCsvList(
+  readEnv("MONGODB_DNS_SERVERS", "8.8.8.8,1.1.1.1")
+);
 const mongodbUri = buildMongoUri({
   explicitUri: readEnv("MONGODB_URI", `mongodb://127.0.0.1:27017/${mongodbDatabaseName}`),
   username: mongodbUsername,
@@ -143,10 +178,16 @@ const otpCodeLength = readNumberEnv("OTP_CODE_LENGTH", 6);
 const otpExpiresInMinutes = readNumberEnv("OTP_EXPIRES_IN_MINUTES", 10);
 const otpResendCooldownSeconds = readNumberEnv("OTP_RESEND_COOLDOWN_SECONDS", 60);
 const otpMaxAttempts = readNumberEnv("OTP_MAX_ATTEMPTS", 5);
+const voiceNotesPerDayLimit = Math.max(0, readNumberEnv("VOICE_NOTES_PER_DAY_LIMIT", 5));
+const voiceNoteDailyLimitTimezone = readTimeZoneEnv(
+  "VOICE_NOTE_DAILY_LIMIT_TIMEZONE",
+  "Africa/Johannesburg"
+);
 
-export const env = {
+export const env = validateRuntimeEnv({
   nodeEnv: readEnv("NODE_ENV", "development"),
   port: Number.isNaN(port) ? 4000 : port,
+  apiBodyLimit: readEnv("API_BODY_LIMIT", "8mb"),
   mongodbUri,
   mongodbUriSafe: sanitizeMongoUri(mongodbUri),
   mongodbDatabaseName,
@@ -154,13 +195,16 @@ export const env = {
   mongodbPassword,
   mongodbClusterHost,
   mongodbAppName,
+  mongodbDnsServers,
   smsApiKey,
   smsBaseUrl,
   otpCodeLength,
   otpExpiresInMinutes,
   otpResendCooldownSeconds,
   otpMaxAttempts,
+  voiceNotesPerDayLimit,
+  voiceNoteDailyLimitTimezone,
   jwtSecret: readEnv("JWT_SECRET", "change-this-before-production"),
   jwtExpiresIn: readEnv("JWT_EXPIRES_IN", "7d"),
   corsOrigins: parseOriginList(readEnv("CORS_ORIGIN", ""))
-};
+});

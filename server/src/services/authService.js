@@ -4,6 +4,7 @@ import { AppError } from "../utils/appError.js";
 import { signAccessToken } from "../utils/token.js";
 import {
   validateExtension,
+  validateLoginPassword,
   validatePassword,
   validatePasswordConfirmation,
   validateRequiredPhoneNumber,
@@ -90,7 +91,6 @@ export async function registerUser(payload = {}) {
 
 export async function loginUser(payload = {}) {
   const safeIdentifier = typeof payload.identifier === "string" ? payload.identifier.trim() : "";
-  const safePassword = validatePassword(payload.password);
 
   if (!safeIdentifier) {
     throw new AppError("Enter your username or phone number.", {
@@ -99,6 +99,8 @@ export async function loginUser(payload = {}) {
       field: "identifier"
     });
   }
+
+  const safePassword = validateLoginPassword(payload.password);
 
   const user = await resolveLoginUser(safeIdentifier);
 

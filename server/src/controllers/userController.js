@@ -1,13 +1,23 @@
 import {
   blockUser,
   followUser,
+  getFollowerUsers,
   getDirectMessageAvailability,
+  getFollowingUsers,
+  getUserProfile,
+  searchUsers,
   setUserPreference,
   unblockUser,
   unfollowUser,
+  updateDirectMessageEncryptionKey,
   updateUserProfile
 } from "../services/userService.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+
+function parseLimit(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? undefined : parsed;
+}
 
 export const updateProfile = asyncHandler(async (req, res) => {
   const user = await updateUserProfile(req.user._id, req.body);
@@ -41,6 +51,51 @@ export const updateNotificationsSetting = asyncHandler(async (req, res) => {
   res.status(200).json({
     message: "Notification setting updated.",
     user
+  });
+});
+
+export const updateDirectMessageEncryptionKeyHandler = asyncHandler(async (req, res) => {
+  const user = await updateDirectMessageEncryptionKey(req.user._id, req.body);
+
+  res.status(200).json({
+    message: "Direct-message encryption key updated.",
+    user
+  });
+});
+
+export const search = asyncHandler(async (req, res) => {
+  const users = await searchUsers(req.query.query, {
+    limit: parseLimit(req.query.limit)
+  });
+
+  res.status(200).json({
+    users
+  });
+});
+
+export const getUser = asyncHandler(async (req, res) => {
+  const result = await getUserProfile(req.user._id, req.params.userId);
+
+  res.status(200).json(result);
+});
+
+export const getFollowers = asyncHandler(async (req, res) => {
+  const users = await getFollowerUsers(req.params.userId, {
+    limit: parseLimit(req.query.limit)
+  });
+
+  res.status(200).json({
+    users
+  });
+});
+
+export const getFollowing = asyncHandler(async (req, res) => {
+  const users = await getFollowingUsers(req.params.userId, {
+    limit: parseLimit(req.query.limit)
+  });
+
+  res.status(200).json({
+    users
   });
 });
 

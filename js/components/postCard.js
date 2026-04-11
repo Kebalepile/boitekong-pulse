@@ -18,7 +18,11 @@ import { showConfirmDialog } from "./confirmDialog.js";
 import { showActionSheet } from "./actionSheet.js";
 import { showReportSheet } from "./reportSheet.js";
 import { showUserPreviewSheet } from "./userPreviewSheet.js";
-import { createCommentCard, createVoiceNotePlayer } from "./commentCard.js";
+import {
+  createCommentCard,
+  createVoiceNotePendingNotice,
+  createVoiceNotePlayer
+} from "./commentCard.js";
 import { findUserById } from "../services/userService.js";
 import { buildCommentTree } from "../utils/commentTree.js";
 import { MAX_COMMENT_LENGTH, validateCommentSubmission } from "../utils/validators.js";
@@ -28,9 +32,15 @@ import {
   formatVoiceNoteDuration,
   MAX_VOICE_NOTE_DURATION_MS,
   configureVoiceNoteAudio,
+  getVoiceNoteSource,
+  isVoiceNotePendingSync,
   getNextVoiceNotePlaybackRate,
   formatVoiceNotePlaybackRate
 } from "../utils/voiceNotes.js";
+import {
+  getVoiceNoteDailyLimitMessage,
+  isVoiceNoteDailyLimitError
+} from "../utils/voiceNoteLimit.js";
 import {
   createVoiceNoteVisualizer,
   attachVoiceNoteScrubber
@@ -73,7 +83,7 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
       return;
     }
 
-    const latestAuthor = findUserById(latestPost.userId) || author;
+    const latestAuthor = latestPost.author || findUserById(latestPost.userId) || author;
     const nextCard = createPostCard(latestPost, latestAuthor, currentUserId, onReactionChange);
 
     card.replaceWith(nextCard);
@@ -157,18 +167,21 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
 
   let postReactionBar = null;
 
-  const handlePostReaction = (reactionType) => {
-    const updatedPost = setPostReaction({
-      postId: post.id,
-      userId: currentUserId,
-      reactionType
-    });
+  const handlePostReaction = async (reactionType) => {
+    try {
+      const updatedPost = await setPostReaction({
+        postId: post.id,
+        reactionType
+      });
 
-    post.reactions = updatedPost.reactions;
+      post.reactions = updatedPost.reactions;
 
-    const nextReactionBar = buildPostReactionBar();
-    postReactionBar.replaceWith(nextReactionBar);
-    postReactionBar = nextReactionBar;
+      const nextReactionBar = buildPostReactionBar();
+      postReactionBar.replaceWith(nextReactionBar);
+      postReactionBar = nextReactionBar;
+    } catch (error) {
+      showToast(error.message || "Could not update the reaction.", "error");
+    }
   };
 
   function buildPostReactionBar() {
@@ -207,7 +220,9 @@ export function openCommentsSheetForPost({
 
 function createPostMenuButton(post, author, currentUserId, onReactionChange) {
   const isOwner = post.userId === currentUserId;
-  const canEditPost = isOwner && !(post.voiceNote?.dataUrl && !post.content);
+  const hasVoiceNote =
+    Boolean(getVoiceNoteSource(post.voiceNote)) || isVoiceNotePendingSync(post.voiceNote);
+  const canEditPost = isOwner && !hasVoiceNote;
   const menuBtn = createElement("button", {
     className: "post-menu-btn",
     type: "button",
@@ -263,11 +278,10 @@ function createPostMenuButton(post, author, currentUserId, onReactionChange) {
                     confirmText: "Delete",
                     cancelText: "Cancel",
                     danger: true,
-                    onConfirm: () => {
+                    onConfirm: async () => {
                       try {
-                        deletePost({
-                          postId: post.id,
-                          userId: currentUserId
+                        await deletePost({
+                          postId: post.id
                         });
 
                         showToast("Post deleted.", "success");
@@ -944,9 +958,10 @@ function createCommentNode({
   thread.style.setProperty("--comment-depth", String(depth > 0 ? 1 : 0));
   thread.dataset.commentId = node.id;
 
-  const author = findUserById(node.userId);
+  const author = node.author || findUserById(node.userId);
   const isOwner = node.userId === currentUserId;
-  const isVoiceNoteOnly = Boolean(node.voiceNote?.dataUrl);
+  const isVoiceNoteOnly =
+    Boolean(getVoiceNoteSource(node.voiceNote)) || isVoiceNotePendingSync(node.voiceNote);
   const canEditComment = isOwner && !isVoiceNoteOnly;
   const replyFormIsOpen = commentUiState.openReplyForms.has(node.id);
   const repliesListIsOpen = commentUiState.openReplyLists.has(node.id);
@@ -1068,19 +1083,22 @@ function createCommentNode({
 
   let reactionBar = null;
 
-  const handleCommentReaction = (reactionType) => {
-    const updatedComment = setCommentReaction({
-      postId,
-      commentId: node.id,
-      userId: currentUserId,
-      reactionType
-    });
+  const handleCommentReaction = async (reactionType) => {
+    try {
+      const updatedComment = await setCommentReaction({
+        postId,
+        commentId: node.id,
+        reactionType
+      });
 
-    node.reactions = updatedComment.reactions;
+      node.reactions = updatedComment.reactions;
 
-    const nextReactionBar = buildCommentReactionBar();
-    reactionBar.replaceWith(nextReactionBar);
-    reactionBar = nextReactionBar;
+      const nextReactionBar = buildCommentReactionBar();
+      reactionBar.replaceWith(nextReactionBar);
+      reactionBar = nextReactionBar;
+    } catch (error) {
+      showToast(error.message || "Could not update the reaction.", "error");
+    }
   };
 
   function buildCommentReactionBar() {
@@ -1178,12 +1196,11 @@ function createCommentNode({
                 confirmText: "Delete",
                 cancelText: "Cancel",
                 danger: true,
-                onConfirm: () => {
+                onConfirm: async () => {
                   try {
-                    deleteCommentFromPost({
+                    await deleteCommentFromPost({
                       postId,
-                      commentId: node.id,
-                      userId: currentUserId
+                      commentId: node.id
                     });
                     clearCommentUiState(node);
 
@@ -1191,7 +1208,7 @@ function createCommentNode({
                       onCommentChange();
                     }
                   } catch (error) {
-                    console.error(error);
+                    showToast(error.message || "Failed to delete comment.", "error");
                   }
                 }
               });
@@ -1829,7 +1846,7 @@ function createCommentForm({
   updateSubmissionMode("text");
   syncCharacterCounter();
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearFormErrors(form);
 
@@ -1847,13 +1864,21 @@ function createCommentForm({
         voiceNote: voiceNoteDraft,
         mode: hasVoiceMode ? submissionMode : "text"
       });
-      onSubmit(safeComment);
+      await onSubmit(safeComment);
 
       if (typeof onSuccess === "function") {
         onSuccess();
       }
     } catch (error) {
-      setFieldError(inputId, error.message || "Failed to save comment.");
+      const message = isVoiceNoteDailyLimitError(error)
+        ? getVoiceNoteDailyLimitMessage(error)
+        : error.message || "Failed to save comment.";
+
+      setFieldError(inputId, message);
+
+      if (isVoiceNoteDailyLimitError(error)) {
+        showToast(message, "error");
+      }
     }
   });
 
@@ -2152,8 +2177,14 @@ function createPostContent(post) {
     wrapper.appendChild(content);
   }
 
-  if (post.voiceNote?.dataUrl) {
+  if (getVoiceNoteSource(post.voiceNote)) {
     wrapper.appendChild(createVoiceNotePlayer(post.voiceNote));
+  } else if (isVoiceNotePendingSync(post.voiceNote)) {
+    wrapper.appendChild(
+      createVoiceNotePendingNotice({
+        className: "post-voice-note-pending-note"
+      })
+    );
   }
 
   if (!fullText || !isLongPost) {

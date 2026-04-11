@@ -3,6 +3,38 @@ import { readReceiptSchema, voiceNoteSchema } from "./shared.js";
 
 const { Schema } = mongoose;
 
+const messageEncryptionSchema = new Schema(
+  {
+    version: {
+      type: String,
+      default: ""
+    },
+    algorithm: {
+      type: String,
+      default: ""
+    },
+    iv: {
+      type: String,
+      default: ""
+    },
+    senderKeyId: {
+      type: String,
+      default: ""
+    },
+    recipientKeyId: {
+      type: String,
+      default: ""
+    },
+    senderPublicKeyJwk: {
+      type: Schema.Types.Mixed,
+      default: null
+    }
+  },
+  {
+    _id: false
+  }
+);
+
 const messageSchema = new Schema(
   {
     conversationId: {
@@ -22,6 +54,15 @@ const messageSchema = new Schema(
       default: "",
       trim: true,
       maxlength: 2000
+    },
+    encryptedText: {
+      type: String,
+      default: "",
+      maxlength: 8192
+    },
+    encryption: {
+      type: messageEncryptionSchema,
+      default: null
     },
     voiceNote: {
       type: voiceNoteSchema,

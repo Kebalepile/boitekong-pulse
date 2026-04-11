@@ -1,10 +1,22 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
-import { createNotification } from "./notificationService.js";
-import { areNotificationsEnabled, getDirectMessageAvailability } from "./userService.js";
-import { normalizeVoiceNote } from "../utils/voiceNotes.js";
+import { apiRequest } from "./apiClient.js";
+import { getCurrentUser, setCurrentUser, upsertUser, upsertUsers } from "./userService.js";
+import {
+  decryptConversationMessages,
+  encryptDirectMessageText,
+  ensureDirectMessageEncryptionSession
+} from "./directMessageEncryptionService.js";
+import { normalizeMessageEncryptionMetadata } from "../utils/directMessageEncryption.js";
+import { normalizeVoiceNote, serializeVoiceNoteForTransport } from "../utils/voiceNotes.js";
 
 export const MESSAGE_EDIT_WINDOW_MS = 60 * 1000;
+
+let loadedConversationUserId = "";
+let conversationsLoadPromise = null;
+let conversationStateVersion = 0;
+const conversationListeners = new Set();
+let conversationsCache = null;
 
 function makeError(code, field, message) {
   const error = new Error(message);
@@ -22,6 +34,10 @@ function normalizeMessageRecord(message = {}, conversationId = "") {
         : conversationId,
     senderId: typeof message.senderId === "string" ? message.senderId : "",
     text: typeof message.text === "string" ? message.text.trim() : "",
+    encryptedText:
+      typeof message.encryptedText === "string" ? message.encryptedText.trim() : "",
+    encryption: normalizeMessageEncryptionMetadata(message.encryption),
+    isEndToEndEncrypted: message.isEndToEndEncrypted === true,
     voiceNote: normalizeVoiceNote(message.voiceNote),
     createdAt:
       typeof message.createdAt === "string" && message.createdAt
@@ -49,6 +65,9 @@ function normalizeConversationRecord(conversation = {}) {
         )
       )
     : [];
+  const participants = Array.isArray(conversation.participants)
+    ? upsertUsers(conversation.participants)
+    : [];
   const hiddenByUserIds = Array.isArray(conversation.hiddenByUserIds)
     ? Array.from(
         new Set(
@@ -57,41 +76,233 @@ function normalizeConversationRecord(conversation = {}) {
       )
     : [];
   const messages = Array.isArray(conversation.messages)
-    ? conversation.messages
+      ? conversation.messages
         .map((message) => normalizeMessageRecord(message, id))
         .filter(
           (message) =>
             message.senderId &&
-            (message.text || message.voiceNote?.dataUrl || message.deletedForEveryone)
+            (
+              message.text ||
+              message.encryptedText ||
+              message.voiceNote ||
+              message.deletedForEveryone
+            )
         )
         .sort((first, second) => new Date(first.createdAt) - new Date(second.createdAt))
     : [];
   const fallbackTimestamp = new Date().toISOString();
-  const latestMessage = messages[messages.length - 1] || null;
 
   return {
     id,
     participantIds,
+    participants,
     createdAt:
       typeof conversation.createdAt === "string" && conversation.createdAt
         ? conversation.createdAt
-        : latestMessage?.createdAt || fallbackTimestamp,
+        : fallbackTimestamp,
     updatedAt:
       typeof conversation.updatedAt === "string" && conversation.updatedAt
         ? conversation.updatedAt
-        : latestMessage?.createdAt || fallbackTimestamp,
+        : messages[messages.length - 1]?.createdAt || fallbackTimestamp,
     hiddenByUserIds,
     messages
   };
 }
 
+function normalizeConversationRecords(conversations = []) {
+  return Array.isArray(conversations)
+    ? conversations.map((conversation) => normalizeConversationRecord(conversation))
+    : [];
+}
+
+function sanitizeVoiceNoteForStorage(voiceNote) {
+  const normalizedVoiceNote = normalizeVoiceNote(voiceNote);
+
+  if (!normalizedVoiceNote) {
+    return null;
+  }
+
+  const remoteUrl = typeof normalizedVoiceNote.url === "string" ? normalizedVoiceNote.url : "";
+
+  return {
+    ...normalizedVoiceNote,
+    dataUrl: "",
+    audioBase64: "",
+    source: /^https?:\/\//i.test(remoteUrl) ? remoteUrl : "",
+    pendingSync: !/^https?:\/\//i.test(remoteUrl)
+  };
+}
+
+function sanitizeMessageRecordForStorage(message = {}) {
+  return {
+    ...message,
+    text: message.encryptedText ? "" : message.text,
+    voiceNote: sanitizeVoiceNoteForStorage(message.voiceNote)
+  };
+}
+
+function sanitizeConversationRecordForStorage(conversation = {}) {
+  return {
+    ...conversation,
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.map((message) => sanitizeMessageRecordForStorage(message))
+      : []
+  };
+}
+
+function sanitizeConversationsForStorage(conversations = []) {
+  return Array.isArray(conversations)
+    ? conversations.map((conversation) => sanitizeConversationRecordForStorage(conversation))
+    : [];
+}
+
+function sortConversations(conversations = []) {
+  return [...conversations].sort(
+    (first, second) => new Date(second.updatedAt) - new Date(first.updatedAt)
+  );
+}
+
+function getCachedConversations() {
+  if (!Array.isArray(conversationsCache)) {
+    conversationsCache = sortConversations(
+      normalizeConversationRecords(storage.get(STORAGE_KEYS.CONVERSATIONS, []))
+    );
+  }
+
+  return conversationsCache;
+}
+
+function emitConversationChange(conversations) {
+  conversationListeners.forEach((listener) => {
+    try {
+      listener(conversations);
+    } catch {
+      // Ignore listener errors so storage updates continue.
+    }
+  });
+}
+
+function saveConversationsInternal(conversations) {
+  const nextConversations = sortConversations(normalizeConversationRecords(conversations));
+  const previousConversations = sortConversations(
+    normalizeConversationRecords(getCachedConversations())
+  );
+
+  if (JSON.stringify(previousConversations) === JSON.stringify(nextConversations)) {
+    return nextConversations;
+  }
+
+  conversationsCache = nextConversations;
+  storage.set(
+    STORAGE_KEYS.CONVERSATIONS,
+    sanitizeConversationsForStorage(nextConversations)
+  );
+  emitConversationChange(nextConversations);
+  return nextConversations;
+}
+
+function syncConversations(conversations, { replace = false } = {}) {
+  const normalizedConversations = normalizeConversationRecords(conversations);
+
+  if (replace) {
+    return saveConversationsInternal(normalizedConversations);
+  }
+
+  const conversationsById = new Map(getConversations().map((conversation) => [conversation.id, conversation]));
+
+  normalizedConversations.forEach((conversation) => {
+    conversationsById.set(conversation.id, {
+      ...(conversationsById.get(conversation.id) || {}),
+      ...conversation
+    });
+  });
+
+  return saveConversationsInternal(Array.from(conversationsById.values()));
+}
+
+function syncConversation(conversation) {
+  if (!conversation) {
+    return null;
+  }
+
+  return syncConversations([conversation])[0] || null;
+}
+
+async function ensureCurrentUserEncryptionSession() {
+  const currentUser = getCurrentUser();
+
+  if (!currentUser?.id) {
+    return null;
+  }
+
+  return ensureDirectMessageEncryptionSession({
+    user: currentUser,
+    onUserUpdated: (updatedUser) => {
+      const nextUser = upsertUser(updatedUser);
+      setCurrentUser(nextUser);
+      return nextUser;
+    }
+  });
+}
+
+async function hydrateConversation(conversation) {
+  if (!conversation) {
+    return null;
+  }
+
+  const currentUser = await ensureCurrentUserEncryptionSession();
+
+  if (!currentUser?.id) {
+    return conversation;
+  }
+
+  return decryptConversationMessages(conversation, currentUser.id);
+}
+
+async function hydrateConversations(conversations = []) {
+  if (!Array.isArray(conversations) || conversations.length === 0) {
+    return [];
+  }
+
+  const currentUser = await ensureCurrentUserEncryptionSession();
+
+  if (!currentUser?.id) {
+    return conversations;
+  }
+
+  return Promise.all(
+    conversations.map((conversation) =>
+      decryptConversationMessages(conversation, currentUser.id)
+    )
+  );
+}
+
 export function getConversations() {
-  const conversations = storage.get(STORAGE_KEYS.CONVERSATIONS, []);
-  return Array.isArray(conversations) ? conversations.map(normalizeConversationRecord) : [];
+  return sortConversations(normalizeConversationRecords(getCachedConversations()));
 }
 
 export function saveConversations(conversations) {
-  storage.set(STORAGE_KEYS.CONVERSATIONS, conversations);
+  return saveConversationsInternal(conversations);
+}
+
+export function subscribeToConversationChanges(listener) {
+  if (typeof listener !== "function") {
+    return () => {};
+  }
+
+  conversationListeners.add(listener);
+
+  return () => {
+    conversationListeners.delete(listener);
+  };
+}
+
+export function resetConversationState() {
+  conversationStateVersion += 1;
+  loadedConversationUserId = "";
+  conversationsLoadPromise = null;
+  conversationsCache = null;
+  storage.remove(STORAGE_KEYS.CONVERSATIONS);
 }
 
 export function getConversationById(conversationId) {
@@ -131,7 +342,47 @@ export function getConversationWithUser({ currentUserId, targetUserId }) {
   );
 }
 
-export function getOrCreateConversation({ currentUserId, targetUserId }) {
+export async function loadConversations({ currentUserId, force = false } = {}) {
+  if (!currentUserId) {
+    return getConversations();
+  }
+
+  if (!force && loadedConversationUserId === currentUserId && !conversationsLoadPromise) {
+    return getConversationsForUser(currentUserId);
+  }
+
+  if (!force && conversationsLoadPromise) {
+    return conversationsLoadPromise;
+  }
+
+  const requestStateVersion = conversationStateVersion;
+  const requestUserId = currentUserId;
+  const loadPromise = apiRequest("/conversations")
+    .then(async (response) => {
+      if (requestStateVersion !== conversationStateVersion) {
+        return getConversationsForUser(requestUserId);
+      }
+
+      loadedConversationUserId = requestUserId;
+      return syncConversations(await hydrateConversations(response.conversations || []), {
+        replace: true
+      });
+    })
+    .finally(() => {
+      if (conversationsLoadPromise === loadPromise) {
+        conversationsLoadPromise = null;
+      }
+    });
+
+  conversationsLoadPromise = loadPromise;
+  return conversationsLoadPromise;
+}
+
+export async function ensureConversationsLoaded(currentUserId) {
+  return loadConversations({ currentUserId, force: false });
+}
+
+export async function getOrCreateConversation({ currentUserId, targetUserId }) {
   if (!currentUserId || !targetUserId) {
     throw makeError("CONVERSATION_INVALID", null, "Could not open that conversation.");
   }
@@ -140,159 +391,51 @@ export function getOrCreateConversation({ currentUserId, targetUserId }) {
     throw makeError("CONVERSATION_SELF", null, "You cannot message yourself.");
   }
 
-  const existingConversation = getConversationWithUser({
-    currentUserId,
-    targetUserId
+  const response = await apiRequest(`/conversations/direct/${encodeURIComponent(targetUserId)}`, {
+    method: "POST"
   });
 
-  if (existingConversation) {
-    if (existingConversation.hiddenByUserIds.includes(currentUserId)) {
-      const conversations = getConversations();
-      const conversationIndex = conversations.findIndex(
-        (conversation) => conversation.id === existingConversation.id
-      );
+  return syncConversation(await hydrateConversation(response.conversation));
+}
 
-      if (conversationIndex !== -1) {
-        conversations[conversationIndex] = {
-          ...conversations[conversationIndex],
-          hiddenByUserIds: conversations[conversationIndex].hiddenByUserIds.filter(
-            (userId) => userId !== currentUserId
-          )
+export async function sendMessage({ conversationId, text, voiceNote = null }) {
+  const currentUser = await ensureCurrentUserEncryptionSession();
+  const conversation = getConversationById(conversationId);
+  const encryptedPayload =
+    !voiceNote && currentUser?.id && conversation
+      ? await encryptDirectMessageText({
+          conversation,
+          currentUser,
+          text
+        })
+      : {
+          text,
+          encryptedText: "",
+          encryption: null
         };
-        saveConversations(conversations);
-        return conversations[conversationIndex];
-      }
+  const response = await apiRequest(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: "POST",
+    body: {
+      text: encryptedPayload.text,
+      encryptedText: encryptedPayload.encryptedText,
+      encryption: encryptedPayload.encryption,
+      voiceNote: serializeVoiceNoteForTransport(voiceNote)
     }
-
-    return existingConversation;
-  }
-
-  const now = new Date().toISOString();
-  const conversations = getConversations();
-  const nextConversation = normalizeConversationRecord({
-    id: crypto.randomUUID(),
-    participantIds: [currentUserId, targetUserId],
-    createdAt: now,
-    updatedAt: now,
-    hiddenByUserIds: [],
-    messages: []
   });
 
-  conversations.push(nextConversation);
-  saveConversations(conversations);
-
-  return nextConversation;
+  return syncConversation(await hydrateConversation(response.conversation));
 }
 
-export function sendMessage({ conversationId, senderId, text, voiceNote = null }) {
-  const safeText = typeof text === "string" ? text.trim() : "";
-  const safeVoiceNote = normalizeVoiceNote(voiceNote);
-
-  if (!safeText && !safeVoiceNote?.dataUrl) {
-    throw makeError("MESSAGE_EMPTY", "message", "Write a message or record a voice note.");
-  }
-
-  if (safeText && safeVoiceNote?.dataUrl) {
-    throw makeError("MESSAGE_MODE_INVALID", "message", "Send text or a voice note, not both.");
-  }
-
-  const conversations = getConversations();
-  const conversationIndex = conversations.findIndex(
-    (conversation) => conversation.id === conversationId
-  );
-
-  if (conversationIndex === -1) {
-    throw makeError("CONVERSATION_NOT_FOUND", null, "Conversation not found.");
-  }
-
-  const conversation = conversations[conversationIndex];
-
-  if (!conversation.participantIds.includes(senderId)) {
-    throw makeError("MESSAGE_FORBIDDEN", null, "You cannot send a message to this conversation.");
-  }
-
-  const recipientUserId = conversation.participantIds.find((userId) => userId !== senderId);
-  const availability = getDirectMessageAvailability({
-    senderUserId: senderId,
-    recipientUserId
-  });
-
-  if (!availability.allowed) {
-    throw makeError(availability.code, null, availability.message);
-  }
-
-  const message = normalizeMessageRecord(
-    {
-      id: crypto.randomUUID(),
-      conversationId,
-      senderId,
-      text: safeText,
-      voiceNote: safeVoiceNote,
-      createdAt: new Date().toISOString(),
-      readBy: [senderId]
-    },
-    conversationId
-  );
-
-  conversations[conversationIndex] = {
-    ...conversation,
-    updatedAt: message.createdAt,
-    hiddenByUserIds: [],
-    messages: [...conversation.messages, message]
-  };
-
-  saveConversations(conversations);
-
-  if (recipientUserId && areNotificationsEnabled(recipientUserId)) {
-    createNotification({
-      userId: recipientUserId,
-      type: "dm",
-      actorUserId: senderId,
-      conversationId,
-      messageId: message.id,
-      title: "New message",
-      text: ""
-    });
-  }
-
-  return conversations[conversationIndex];
-}
-
-export function markConversationRead({ conversationId, userId }) {
-  const conversations = getConversations();
-  const conversationIndex = conversations.findIndex(
-    (conversation) => conversation.id === conversationId
-  );
-
-  if (conversationIndex === -1) {
+export async function markConversationRead({ conversationId, userId }) {
+  if (!conversationId || !userId) {
     return null;
   }
 
-  const conversation = conversations[conversationIndex];
-  let didChange = false;
-  const nextMessages = conversation.messages.map((message) => {
-    if (message.senderId === userId || message.readBy.includes(userId)) {
-      return message;
-    }
-
-    didChange = true;
-    return {
-      ...message,
-      readBy: [...message.readBy, userId]
-    };
+  const response = await apiRequest(`/conversations/${encodeURIComponent(conversationId)}/read`, {
+    method: "POST"
   });
 
-  if (!didChange) {
-    return conversation;
-  }
-
-  conversations[conversationIndex] = {
-    ...conversation,
-    messages: nextMessages
-  };
-
-  saveConversations(conversations);
-  return conversations[conversationIndex];
+  return syncConversation(await hydrateConversation(response.conversation));
 }
 
 export function canEditMessage({ message, userId, now = Date.now() }) {
@@ -309,191 +452,81 @@ export function canEditMessage({ message, userId, now = Date.now() }) {
   return now - createdAtMs <= MESSAGE_EDIT_WINDOW_MS;
 }
 
-export function updateMessage({ conversationId, messageId, userId, text }) {
-  const safeText = typeof text === "string" ? text.trim() : "";
-
-  if (!safeText) {
-    throw makeError("MESSAGE_EMPTY", "message", "Write a message before saving.");
-  }
-
-  const conversations = getConversations();
-  const conversationIndex = conversations.findIndex(
-    (conversation) => conversation.id === conversationId
+export async function updateMessage({ conversationId, messageId, text }) {
+  const currentUser = await ensureCurrentUserEncryptionSession();
+  const conversation = getConversationById(conversationId);
+  const encryptedPayload =
+    currentUser?.id && conversation
+      ? await encryptDirectMessageText({
+          conversation,
+          currentUser,
+          text
+        })
+      : {
+          text,
+          encryptedText: "",
+          encryption: null
+        };
+  const response = await apiRequest(
+    `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    {
+      method: "PATCH",
+      body: {
+        text: encryptedPayload.text,
+        encryptedText: encryptedPayload.encryptedText,
+        encryption: encryptedPayload.encryption
+      }
+    }
   );
 
-  if (conversationIndex === -1) {
-    throw makeError("CONVERSATION_NOT_FOUND", null, "Conversation not found.");
-  }
-
-  const conversation = conversations[conversationIndex];
-  const messageIndex = conversation.messages.findIndex((message) => message.id === messageId);
-
-  if (messageIndex === -1) {
-    throw makeError("MESSAGE_NOT_FOUND", null, "Message not found.");
-  }
-
-  const message = conversation.messages[messageIndex];
-
-  if (!canEditMessage({ message, userId })) {
-    throw makeError("MESSAGE_EDIT_WINDOW_EXPIRED", null, "That message can no longer be edited.");
-  }
-
-  const updatedAt = new Date().toISOString();
-  const nextMessages = [...conversation.messages];
-  nextMessages[messageIndex] = {
-    ...message,
-    text: safeText,
-    editedAt: updatedAt
-  };
-
-  conversations[conversationIndex] = {
-    ...conversation,
-    updatedAt,
-    messages: nextMessages
-  };
-
-  saveConversations(conversations);
-  return conversations[conversationIndex];
+  return syncConversation(await hydrateConversation(response.conversation));
 }
 
-export function deleteMessageForEveryone({ conversationId, messageId, userId }) {
-  const conversations = getConversations();
-  const conversationIndex = conversations.findIndex(
-    (conversation) => conversation.id === conversationId
+export async function deleteMessageForEveryone({ conversationId, messageId }) {
+  const response = await apiRequest(
+    `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    {
+      method: "DELETE"
+    }
   );
 
-  if (conversationIndex === -1) {
-    throw makeError("CONVERSATION_NOT_FOUND", null, "Conversation not found.");
-  }
-
-  const conversation = conversations[conversationIndex];
-  const messageIndex = conversation.messages.findIndex((message) => message.id === messageId);
-
-  if (messageIndex === -1) {
-    throw makeError("MESSAGE_NOT_FOUND", null, "Message not found.");
-  }
-
-  const message = conversation.messages[messageIndex];
-
-  if (message.senderId !== userId) {
-    throw makeError(
-      "MESSAGE_DELETE_FORBIDDEN",
-      null,
-      "You can only delete your own messages."
-    );
-  }
-
-  if (message.deletedForEveryone) {
-    return conversation;
-  }
-
-  const deletedAt = new Date().toISOString();
-  const nextMessages = [...conversation.messages];
-  nextMessages[messageIndex] = {
-    ...message,
-    text: "",
-    voiceNote: null,
-    deletedForEveryone: true,
-    deletedAt,
-    editedAt: ""
-  };
-
-  conversations[conversationIndex] = {
-    ...conversation,
-    updatedAt: deletedAt,
-    messages: nextMessages
-  };
-
-  saveConversations(conversations);
-  return conversations[conversationIndex];
+  return syncConversation(await hydrateConversation(response.conversation));
 }
 
-export function archiveConversationForUser({ conversationId, userId }) {
-  const conversations = getConversations();
-  const conversationIndex = conversations.findIndex(
-    (conversation) => conversation.id === conversationId
-  );
-
-  if (conversationIndex === -1) {
-    return null;
-  }
-
-  const conversation = conversations[conversationIndex];
-
-  if (
-    !conversation.participantIds.includes(userId) ||
-    conversation.hiddenByUserIds.includes(userId)
-  ) {
-    return conversation;
-  }
-
-  conversations[conversationIndex] = {
-    ...conversation,
-    hiddenByUserIds: [...conversation.hiddenByUserIds, userId]
-  };
-
-  saveConversations(conversations);
-  return conversations[conversationIndex];
-}
-
-export function archiveSelectedConversationsForUser({ conversationIds, userId }) {
-  if (!Array.isArray(conversationIds) || conversationIds.length === 0 || !userId) {
+export async function archiveConversationForUser({ conversationId, userId }) {
+  if (!conversationId || !userId) {
     return getConversations();
   }
 
-  const selectedIds = new Set(
-    conversationIds.filter((conversationId) => typeof conversationId === "string" && conversationId)
-  );
-  const conversations = getConversations();
-  let didChange = false;
-  const nextConversations = conversations.map((conversation) => {
-    if (
-      !selectedIds.has(conversation.id) ||
-      !conversation.participantIds.includes(userId) ||
-      conversation.hiddenByUserIds.includes(userId)
-    ) {
-      return conversation;
-    }
-
-    didChange = true;
-    return {
-      ...conversation,
-      hiddenByUserIds: [...conversation.hiddenByUserIds, userId]
-    };
+  return archiveSelectedConversationsForUser({
+    conversationIds: [conversationId],
+    userId
   });
-
-  if (!didChange) {
-    return conversations;
-  }
-
-  saveConversations(nextConversations);
-  return nextConversations;
 }
 
-export function archiveAllConversationsForUser(userId) {
-  const conversations = getConversations();
-  let didChange = false;
-  const nextConversations = conversations.map((conversation) => {
-    if (
-      !conversation.participantIds.includes(userId) ||
-      conversation.hiddenByUserIds.includes(userId)
-    ) {
-      return conversation;
+export async function archiveSelectedConversationsForUser({ conversationIds, userId }) {
+  const response = await apiRequest("/conversations/archive", {
+    method: "POST",
+    body: {
+      conversationIds
     }
-
-    didChange = true;
-    return {
-      ...conversation,
-      hiddenByUserIds: [...conversation.hiddenByUserIds, userId]
-    };
   });
 
-  if (!didChange) {
-    return conversations;
-  }
+  loadedConversationUserId = userId || loadedConversationUserId;
+  return syncConversations(await hydrateConversations(response.conversations || []), {
+    replace: true
+  });
+}
 
-  saveConversations(nextConversations);
-  return nextConversations;
+export async function archiveAllConversationsForUser(userId) {
+  const response = await apiRequest("/conversations/archive-all", {
+    method: "POST"
+  });
+
+  loadedConversationUserId = userId || loadedConversationUserId;
+  return syncConversations(await hydrateConversations(response.conversations || []), {
+    replace: true
+  });
 }
 
 export function getUnreadConversationCount(userId) {

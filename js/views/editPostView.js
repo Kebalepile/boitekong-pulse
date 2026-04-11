@@ -6,16 +6,24 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
-import { getPostById, updatePost } from "../services/postService.js";
+import { getPostById, loadPostById, updatePost } from "../services/postService.js";
 import { showToast } from "../components/toast.js";
 import { navigate } from "../router.js";
+import { getVoiceNoteSource, isVoiceNotePendingSync } from "../utils/voiceNotes.js";
 
 const MAX_POST_LENGTH = 1000;
 
-export function renderEditPost(app, currentUser, payload) {
+export async function renderEditPost(app, currentUser, payload) {
   clearElement(app);
 
   const postId = payload?.postId;
+  if (postId) {
+    try {
+      await loadPostById(postId);
+    } catch {
+      // Let the cached lookup and existing UI handling resolve the empty state.
+    }
+  }
   const post = postId ? getPostById(postId) : null;
 
   if (!post) {
@@ -30,7 +38,7 @@ export function renderEditPost(app, currentUser, payload) {
     return;
   }
 
-  if (post.voiceNote?.dataUrl) {
+  if (getVoiceNoteSource(post.voiceNote) || isVoiceNotePendingSync(post.voiceNote)) {
     showToast("Voice-note posts can't be edited. Delete and repost instead.", "error");
     navigate("feed");
     return;
@@ -109,19 +117,17 @@ export function renderEditPost(app, currentUser, payload) {
 
   attachCharacterCounter("edit-post-content", "edit-post-content-counter");
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     clearFormErrors(form);
 
     const content = document.getElementById("edit-post-content").value;
 
     try {
-      updatePost({
+      await updatePost({
         postId: post.id,
-        userId: currentUser.id,
         content,
-        image: post.image || "",
-        location: post.location
+        image: post.image || ""
       });
 
       showToast("Post updated successfully.", "success");

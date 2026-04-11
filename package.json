@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "db:init": "node server/src/scripts/initDatabase.js",
+    "check:db": "node server/src/scripts/smokeDatabase.js",
+    "cleanup:legacy-voice-notes": "node server/src/scripts/purgeLegacyVoiceNotes.js",
     "dev:api": "node --watch server/src/server.js",
     "start:api": "node server/src/server.js",
     "check:api": "node --check server/src/server.js"

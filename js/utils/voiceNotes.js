@@ -6,9 +6,85 @@ const PREFERRED_VOICE_NOTE_MIME_TYPES = [
   "audio/mp4",
   "audio/ogg;codecs=opus"
 ];
+const VOICE_NOTE_RECORDING_AUDIO_CONSTRAINTS = {
+  channelCount: { ideal: 1 },
+  noiseSuppression: { ideal: true },
+  echoCancellation: { ideal: true },
+  autoGainControl: { ideal: true }
+};
 
 export const MAX_VOICE_NOTE_DURATION_MS = 60000;
 export const VOICE_NOTE_PLAYBACK_RATES = [1, 1.5, 2];
+export const VOICE_NOTE_TARGET_AUDIO_BITS_PER_SECOND = 16000;
+
+function trimString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeBase64(value) {
+  return trimString(value).replace(/\s+/g, "");
+}
+
+function extractAudioBase64FromDataUrl(dataUrl) {
+  const trimmed = trimString(dataUrl);
+
+  if (!trimmed.startsWith("data:audio/")) {
+    return "";
+  }
+
+  const commaIndex = trimmed.indexOf(",");
+
+  if (commaIndex < 0) {
+    return "";
+  }
+
+  return normalizeBase64(trimmed.slice(commaIndex + 1));
+}
+
+function buildInlineVoiceNoteDataUrl({ audioBase64, mimeType = "audio/webm" }) {
+  const safeAudioBase64 = normalizeBase64(audioBase64);
+
+  if (!safeAudioBase64) {
+    return "";
+  }
+
+  return `data:${trimString(mimeType) || "audio/webm"};base64,${safeAudioBase64}`;
+}
+
+export function getVoiceNoteAudioBase64(voiceNote) {
+  return normalizeBase64(voiceNote?.audioBase64);
+}
+
+export function getVoiceNoteSource(voiceNote) {
+  const dataUrl =
+    typeof voiceNote?.dataUrl === "string" && voiceNote.dataUrl.startsWith("data:audio/")
+      ? voiceNote.dataUrl
+      : "";
+
+  if (dataUrl) {
+    return dataUrl;
+  }
+
+  const audioBase64 = getVoiceNoteAudioBase64(voiceNote);
+
+  if (audioBase64) {
+    return buildInlineVoiceNoteDataUrl({
+      audioBase64,
+      mimeType: voiceNote?.mimeType
+    });
+  }
+
+  const remoteUrl = typeof voiceNote?.url === "string" ? voiceNote.url.trim() : "";
+  return /^https?:\/\//i.test(remoteUrl) ? remoteUrl : "";
+}
+
+export function isVoiceNotePendingSync(voiceNote) {
+  return Boolean(voiceNote?.pendingSync) && !getVoiceNoteSource(voiceNote);
+}
+
+export function getVoiceNotePendingSyncMessage() {
+  return "Voice note is reloading after refresh. It should be ready in a moment.";
+}
 
 export function isVoiceNoteRecordingSupported() {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
@@ -49,6 +125,48 @@ export function getVoiceNoteFeatureStatus() {
   };
 }
 
+function createMediaRecorder(stream, preferredMimeType) {
+  const options = {};
+
+  if (preferredMimeType) {
+    options.mimeType = preferredMimeType;
+  }
+
+  if (Number.isFinite(VOICE_NOTE_TARGET_AUDIO_BITS_PER_SECOND)) {
+    options.audioBitsPerSecond = VOICE_NOTE_TARGET_AUDIO_BITS_PER_SECOND;
+  }
+
+  try {
+    return Object.keys(options).length > 0
+      ? new window.MediaRecorder(stream, options)
+      : new window.MediaRecorder(stream);
+  } catch (error) {
+    if ("audioBitsPerSecond" in options) {
+      delete options.audioBitsPerSecond;
+
+      try {
+        return Object.keys(options).length > 0
+          ? new window.MediaRecorder(stream, options)
+          : new window.MediaRecorder(stream);
+      } catch {
+        // Fall through to the plain recorder constructor below.
+      }
+    }
+
+    if ("mimeType" in options) {
+      try {
+        return new window.MediaRecorder(stream);
+      } catch {
+        // Re-throw the original error below if the bare constructor also fails.
+      }
+    }
+
+    throw (error instanceof Error
+      ? error
+      : new Error("Voice note recording could not be started."));
+  }
+}
+
 export async function startVoiceNoteRecording({
   maxDurationMs = MAX_VOICE_NOTE_DURATION_MS
 } = {}) {
@@ -56,11 +174,11 @@ export async function startVoiceNoteRecording({
     throw new Error("Voice note recording is not supported in this browser.");
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: VOICE_NOTE_RECORDING_AUDIO_CONSTRAINTS
+  });
   const preferredMimeType = getSupportedVoiceNoteMimeType();
-  const mediaRecorder = preferredMimeType
-    ? new window.MediaRecorder(stream, { mimeType: preferredMimeType })
-    : new window.MediaRecorder(stream);
+  const mediaRecorder = createMediaRecorder(stream, preferredMimeType);
   const chunks = [];
   const startedAt = Date.now();
   let cancelled = false;
@@ -155,12 +273,19 @@ export function normalizeVoiceNote(voiceNote) {
     return null;
   }
 
-  const safeSource =
-    typeof voiceNote.dataUrl === "string" && voiceNote.dataUrl.startsWith("data:audio/")
-      ? voiceNote.dataUrl
-      : null;
+  const audioBase64 = getVoiceNoteAudioBase64(voiceNote);
+  const remoteUrl = typeof voiceNote.url === "string" ? voiceNote.url.trim() : "";
+  const pendingSync = voiceNote?.pendingSync === true;
+  const safeSource = audioBase64
+    ? buildInlineVoiceNoteDataUrl({
+        audioBase64,
+        mimeType: voiceNote?.mimeType
+      })
+    : /^https?:\/\//i.test(remoteUrl)
+      ? remoteUrl
+      : "";
 
-  if (!safeSource) {
+  if (!safeSource && !pendingSync) {
     return null;
   }
 
@@ -169,7 +294,12 @@ export function normalizeVoiceNote(voiceNote) {
     : 0;
 
   return {
-    dataUrl: safeSource,
+    dataUrl: "",
+    audioBase64,
+    url: remoteUrl,
+    storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey.trim() : "",
+    source: safeSource,
+    pendingSync,
     mimeType:
       typeof voiceNote.mimeType === "string" && voiceNote.mimeType
         ? voiceNote.mimeType
@@ -177,6 +307,28 @@ export function normalizeVoiceNote(voiceNote) {
     waveform: normalizeVoiceWaveform(voiceNote.waveform),
     durationMs,
     size: Number.isFinite(voiceNote.size) ? Math.max(0, voiceNote.size) : 0
+  };
+}
+
+export function serializeVoiceNoteForTransport(voiceNote) {
+  const normalizedVoiceNote = normalizeVoiceNote(voiceNote);
+
+  if (!normalizedVoiceNote) {
+    return null;
+  }
+
+  if (!normalizedVoiceNote.audioBase64 && !normalizedVoiceNote.url) {
+    return null;
+  }
+
+  return {
+    audioBase64: normalizedVoiceNote.audioBase64,
+    url: normalizedVoiceNote.url,
+    storageKey: normalizedVoiceNote.storageKey,
+    mimeType: normalizedVoiceNote.mimeType,
+    durationMs: normalizedVoiceNote.durationMs,
+    size: normalizedVoiceNote.size,
+    waveform: normalizedVoiceNote.waveform
   };
 }
 
@@ -230,8 +382,11 @@ export function configureVoiceNoteAudio(audio, source = "", options = {}) {
 }
 
 async function createVoiceNotePayload({ blob, startedAt, maxDurationMs }) {
+  const dataUrl = await readBlobAsDataUrl(blob);
+
   return {
-    dataUrl: await readBlobAsDataUrl(blob),
+    dataUrl,
+    audioBase64: extractAudioBase64FromDataUrl(dataUrl),
     mimeType: blob.type || "audio/webm",
     durationMs: Math.min(Date.now() - startedAt, maxDurationMs),
     size: blob.size

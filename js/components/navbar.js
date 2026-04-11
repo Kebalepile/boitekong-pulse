@@ -1,22 +1,30 @@
 import { clearElement, createElement } from "../utils/dom.js";
-import { navigate, handleLogout } from "../router.js";
+import { navigate, handleLogout, registerViewCleanup } from "../router.js";
 import { createBrandMark } from "./brandMark.js";
 import { createAvatarElement } from "../utils/avatar.js";
 import { showUserPreviewSheet } from "./userPreviewSheet.js";
 import { showToast } from "./toast.js";
-import { getUnreadConversationCount } from "../services/messageService.js";
+import {
+  getUnreadConversationCount,
+  subscribeToConversationChanges
+} from "../services/messageService.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
 import {
   clearConversationNotifications,
-  clearNotificationsForUser,
   ensureBrowserNotificationPermission,
   getBrowserNotificationPermissionStatus,
   getNotificationsForUser,
   getUnreadNotificationCount,
+  loadNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
   registerNotificationOpenHandler,
-  removeNotification
+  subscribeToNotificationChanges
 } from "../services/notificationService.js";
-import { findUserById, setNotificationsEnabled } from "../services/userService.js";
+import {
+  findUserById,
+  setNotificationsEnabledRemote
+} from "../services/userService.js";
 import {
   NOTIFICATION_BATCH_SIZE,
   createLoadMoreControl
@@ -81,11 +89,13 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
     typeof options.initialSearchQuery === "string" ? options.initialSearchQuery : "";
   const initialSearchMode = options.initialSearchMode === "users" ? "users" : "posts";
   const searchModeOnLoad = Boolean(options.searchMode || activeRoute === "search");
-  const unreadConversationCount = getUnreadConversationCount(currentUser.id);
-  const messagesMenuLabel =
-    unreadConversationCount > 0
+  const getMessagesMenuLabel = () => {
+    const unreadConversationCount = getUnreadConversationCount(currentUser.id);
+    return unreadConversationCount > 0
       ? `Messages (${formatCompactCount(unreadConversationCount)})`
       : "Messages";
+  };
+  const messagesMenuLabel = getMessagesMenuLabel();
 
   const header = createElement("header", { className: "topbar" });
   const topRow = createElement("div", { className: "topbar-row" });
@@ -345,7 +355,7 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
 
   const drawerController = createTopbarDrawer({
     currentUser,
-    messagesMenuLabel,
+    getMessagesMenuLabel,
     onNavigate: (route, payload = null) => navigate(route, payload),
     onLogout: handleLogout
   });
@@ -356,15 +366,28 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   });
   const accountMenuController = createAccountMenu({
     currentUser,
-    messagesMenuLabel,
+    getMessagesMenuLabel,
     onNavigate: (route, payload = null) => navigate(route, payload),
     onLogout: handleLogout
   });
 
   let searchMode = false;
 
+  registerViewCleanup(
+    subscribeToNotificationChanges(() => {
+      syncNotificationsButton();
+      notificationsMenuController.refresh();
+    })
+  );
+  registerViewCleanup(
+    subscribeToConversationChanges(() => {
+      drawerController.refresh();
+      accountMenuController.refresh();
+    })
+  );
+
   registerNotificationOpenHandler((notification) => {
-    handleNotificationSelection({
+    void handleNotificationSelection({
       notification,
       currentUserId: currentUser.id,
       onNavigate: (route, payload = null) => navigate(route, payload),
@@ -435,9 +458,10 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   return header;
 }
 
-function createTopbarDrawer({ currentUser, messagesMenuLabel, onNavigate, onLogout }) {
+function createTopbarDrawer({ currentUser, getMessagesMenuLabel, onNavigate, onLogout }) {
   let root = null;
   let closeTimerId = null;
+  let messagesItem = null;
 
   const ensureRoot = () => {
     if (root?.isConnected) {
@@ -480,13 +504,14 @@ function createTopbarDrawer({ currentUser, messagesMenuLabel, onNavigate, onLogo
       className: "topbar-drawer-section-title",
       text: "Account"
     });
+    messagesItem = createDrawerItem({
+      iconName: "messages",
+      label: getMessagesMenuLabel(),
+      onSelect: () => onNavigate("messages")
+    });
     accountSection.append(
       accountTitle,
-      createDrawerItem({
-        iconName: "messages",
-        label: messagesMenuLabel,
-        onSelect: () => onNavigate("messages")
-      }),
+      messagesItem,
       createDrawerItem({
         iconName: "logout",
         label: "Logout",
@@ -564,6 +589,11 @@ function createTopbarDrawer({ currentUser, messagesMenuLabel, onNavigate, onLogo
       installItem.hidden = !canInstallApp();
     }
 
+    const messagesLabel = messagesItem?.querySelector(".topbar-drawer-item-label");
+    if (messagesLabel) {
+      messagesLabel.textContent = getMessagesMenuLabel();
+    }
+
     if (!drawer.isConnected) {
       document.body.appendChild(drawer);
       window.requestAnimationFrame(() => {
@@ -585,7 +615,14 @@ function createTopbarDrawer({ currentUser, messagesMenuLabel, onNavigate, onLogo
     }, 180);
   };
 
-  return { open, close };
+  const refresh = () => {
+    const messagesLabel = messagesItem?.querySelector(".topbar-drawer-item-label");
+    if (messagesLabel) {
+      messagesLabel.textContent = getMessagesMenuLabel();
+    }
+  };
+
+  return { open, close, refresh };
 }
 
 function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChange = null }) {
@@ -593,6 +630,7 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
   let closeTimerId = null;
   let permissionHelper = null;
   let visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+  let renderCurrentList = () => {};
 
   const updatePermissionHelper = () => {
     if (!permissionHelper) {
@@ -655,11 +693,15 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
     const notificationsToggle = createNotificationsToggle({
       checked: currentUser.notificationsEnabled !== false,
       onChange: async (enabled) => {
-        setNotificationsEnabled({
-          userId: currentUser.id,
-          enabled
-        });
-        currentUser.notificationsEnabled = enabled;
+        try {
+          const updatedUser = await setNotificationsEnabledRemote({
+            enabled
+          });
+          currentUser.notificationsEnabled = updatedUser.notificationsEnabled;
+        } catch (error) {
+          showToast(error.message || "Could not update notification settings.", "error");
+          return;
+        }
 
         if (enabled) {
           await ensureBrowserNotificationPermission();
@@ -681,7 +723,7 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       clearElement(list);
 
       const notifications = getNotificationsForUser(currentUser.id);
-      markAllBtn.disabled = notifications.length === 0;
+      markAllBtn.disabled = notifications.every((notification) => notification.read === true);
 
       if (notifications.length === 0) {
         list.appendChild(
@@ -741,7 +783,7 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
         copy.appendChild(itemTime);
         item.append(avatar, copy);
         item.addEventListener("click", () => {
-          handleNotificationSelection({
+          void handleNotificationSelection({
             notification,
             currentUserId: currentUser.id,
             onNavigate,
@@ -766,9 +808,10 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
         );
       }
     };
+    renderCurrentList = renderList;
 
-    markAllBtn.addEventListener("click", () => {
-      clearNotificationsForUser(currentUser.id);
+    markAllBtn.addEventListener("click", async () => {
+      await markAllNotificationsRead(currentUser.id);
       visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
       renderList();
       close();
@@ -804,6 +847,21 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       });
     }
 
+    void loadNotifications({
+      currentUserId: currentUser.id,
+      force: true
+    })
+      .then(() => {
+        visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+        renderCurrentList();
+        if (typeof onNotificationsChange === "function") {
+          onNotificationsChange();
+        }
+      })
+      .catch((error) => {
+        showToast(error.message || "Could not load notifications.", "error");
+      });
+
     if (currentUser.notificationsEnabled !== false) {
       void ensureBrowserNotificationPermission().then(() => {
         updatePermissionHelper();
@@ -827,7 +885,12 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
     }, 180);
   };
 
-  return { open, close };
+  const refresh = () => {
+    updatePermissionHelper();
+    renderCurrentList();
+  };
+
+  return { open, close, refresh };
 }
 
 function createNotificationsToggle({ checked = true, onChange }) {
@@ -862,7 +925,7 @@ function createNotificationsToggle({ checked = true, onChange }) {
   return label;
 }
 
-function handleNotificationSelection({
+async function handleNotificationSelection({
   notification,
   currentUserId,
   onNavigate,
@@ -870,12 +933,12 @@ function handleNotificationSelection({
   close
 }) {
   if (notification.type === "dm" && notification.conversationId) {
-    clearConversationNotifications({
+    await clearConversationNotifications({
       userId: currentUserId,
       conversationId: notification.conversationId
     });
   } else {
-    removeNotification(notification.id);
+    await markNotificationRead(notification.id);
   }
 
   if (typeof onNotificationsChange === "function") {
@@ -902,7 +965,12 @@ function handleNotificationSelection({
   }
 
   if (
-    (notification.type === "post_comment" || notification.type === "comment_reply") &&
+    (
+      notification.type === "post_comment" ||
+      notification.type === "comment_reply" ||
+      notification.type === "post_reaction" ||
+      notification.type === "comment_reaction"
+    ) &&
     notification.postId
   ) {
     onNavigate("feed", {
@@ -915,9 +983,10 @@ function handleNotificationSelection({
   onNavigate("feed");
 }
 
-function createAccountMenu({ currentUser, messagesMenuLabel, onNavigate, onLogout }) {
+function createAccountMenu({ currentUser, getMessagesMenuLabel, onNavigate, onLogout }) {
   let root = null;
   let closeTimerId = null;
+  let messagesItem = null;
 
   const ensureRoot = () => {
     if (root?.isConnected) {
@@ -976,12 +1045,13 @@ function createAccountMenu({ currentUser, messagesMenuLabel, onNavigate, onLogou
     summary.append(avatar, summaryCopy);
 
     const actions = createElement("div", { className: "topbar-account-actions" });
-    actions.append(
-      createAccountItem({
+    messagesItem = createAccountItem({
         iconName: "messages",
-        label: messagesMenuLabel,
+        label: getMessagesMenuLabel(),
         onSelect: () => onNavigate("messages")
-      }),
+      });
+    actions.append(
+      messagesItem,
       createAccountItem({
         iconName: "logout",
         label: "Sign out",
@@ -1001,6 +1071,11 @@ function createAccountMenu({ currentUser, messagesMenuLabel, onNavigate, onLogou
 
   const open = () => {
     const menu = ensureRoot();
+    const messagesLabel = messagesItem?.querySelector(".topbar-account-item-label");
+    if (messagesLabel) {
+      messagesLabel.textContent = getMessagesMenuLabel();
+    }
+
     if (!menu.isConnected) {
       document.body.appendChild(menu);
       window.requestAnimationFrame(() => {
@@ -1022,7 +1097,14 @@ function createAccountMenu({ currentUser, messagesMenuLabel, onNavigate, onLogou
     }, 180);
   };
 
-  return { open, close };
+  const refresh = () => {
+    const messagesLabel = messagesItem?.querySelector(".topbar-account-item-label");
+    if (messagesLabel) {
+      messagesLabel.textContent = getMessagesMenuLabel();
+    }
+  };
+
+  return { open, close, refresh };
 }
 
 function createDrawerItem({ iconName, label, onSelect, danger = false }) {
@@ -1142,6 +1224,14 @@ function getNotificationTitle(notification, actor) {
     return `${actorName} replied to your comment`;
   }
 
+  if (notification.type === "post_reaction") {
+    return `${actorName} reacted to your post`;
+  }
+
+  if (notification.type === "comment_reaction") {
+    return `${actorName} reacted to your comment`;
+  }
+
   return notification.title || "Notification";
 }
 
@@ -1150,7 +1240,9 @@ function getNotificationBody(notification) {
     notification.type === "dm" ||
     notification.type === "follow" ||
     notification.type === "post_comment" ||
-    notification.type === "comment_reply"
+    notification.type === "comment_reply" ||
+    notification.type === "post_reaction" ||
+    notification.type === "comment_reaction"
   ) {
     return "";
   }

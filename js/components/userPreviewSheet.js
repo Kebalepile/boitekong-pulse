@@ -1,13 +1,11 @@
 import { createElement } from "../utils/dom.js";
 import { createAvatarElement } from "../utils/avatar.js";
 import {
-  findUserById,
-  getFollowerCount,
-  getFollowerUsers,
-  getFollowingUsers,
-  isFollowingUser,
-  followUser,
-  unfollowUser
+  fetchFollowerUsers,
+  fetchFollowingUsers,
+  fetchUserProfile,
+  followUserRemote,
+  unfollowUserRemote
 } from "../services/userService.js";
 import { showToast } from "./toast.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
@@ -56,8 +54,31 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
     }
   };
 
-  const renderSheet = (targetUserId, listType = "following") => {
-    const user = findUserById(targetUserId);
+  const renderSheet = async (targetUserId, listType = "following") => {
+    sheet.replaceChildren(
+      createElement("p", {
+        className: "user-preview-empty",
+        text: "Loading profile..."
+      })
+    );
+
+    let profile;
+    let followerUsers;
+    let followingUsers;
+
+    try {
+      [profile, followerUsers, followingUsers] = await Promise.all([
+        fetchUserProfile(targetUserId),
+        fetchFollowerUsers(targetUserId, { limit: 18 }),
+        fetchFollowingUsers(targetUserId, { limit: 18 })
+      ]);
+    } catch (error) {
+      closeSheet();
+      showToast(error.message || "That profile is no longer available.", "error");
+      return;
+    }
+
+    const user = profile?.user || null;
 
     if (!user) {
       closeSheet();
@@ -66,14 +87,9 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
     }
 
     const isOwnProfile = user.id === currentUserId;
-    const followerCount = getFollowerCount(user.id);
-    const followerUsers = getFollowerUsers(user.id, { limit: 18 });
-    const followingUsers = getFollowingUsers(user.id, { limit: 18 });
-    const followingCount = Array.isArray(user.followingUserIds) ? user.followingUserIds.length : 0;
-    const followsTarget = isFollowingUser({
-      currentUserId,
-      targetUserId: user.id
-    });
+    const followerCount = Number(profile?.stats?.followerCount ?? followerUsers.length);
+    const followingCount = Number(profile?.stats?.followingCount ?? followingUsers.length);
+    const followsTarget = profile?.stats?.isFollowing === true;
 
     const chrome = createElement("div", { className: "user-preview-chrome" });
     const handle = createElement("span", {
@@ -198,21 +214,19 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
         navigate("messages", { userId: user.id });
       });
 
-      followBtn.addEventListener("click", () => {
+      followBtn.addEventListener("click", async () => {
         try {
           if (followsTarget) {
-            unfollowUser({
-              currentUserId,
+            await unfollowUserRemote({
               targetUserId: user.id
             });
           } else {
-            followUser({
-              currentUserId,
+            await followUserRemote({
               targetUserId: user.id
             });
           }
 
-          renderSheet(user.id, listType);
+          await renderSheet(user.id, listType);
         } catch (error) {
           showToast(error.message || "Could not update follow state.", "error");
         }
@@ -250,7 +264,7 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
 
         personBtn.append(personAvatar, personName);
         personBtn.addEventListener("click", () => {
-          renderSheet(followedUser.id, "following");
+          void renderSheet(followedUser.id, "following");
         });
         followingScroller.appendChild(personBtn);
       });
@@ -288,7 +302,7 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
   root.append(overlay, container);
   document.body.appendChild(root);
 
-  renderSheet(userId, initialListType === "followers" ? "followers" : "following");
+  void renderSheet(userId, initialListType === "followers" ? "followers" : "following");
 }
 
 function createStatChip({ value, label, active = false }) {

@@ -6,5 +6,5 @@ document.addEventListener("DOMContentLoaded", () => {
     navigator.serviceWorker.register("./service-worker.js").catch(() => {});
   }
 
-  initRouter();
+  void initRouter();
 });

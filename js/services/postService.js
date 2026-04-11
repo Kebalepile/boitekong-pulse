@@ -1,20 +1,20 @@
-import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
-import { createPost } from "../models/postModel.js";
-import { createComment } from "../models/commentModel.js";
-import { createNotification } from "./notificationService.js";
-import { areNotificationsEnabled } from "./userService.js";
+import { storage } from "../storage/storage.js";
 import { getHiddenTargetIdsForUser } from "./reportService.js";
+import { apiRequest } from "./apiClient.js";
+import { upsertUser, upsertUsers } from "./userService.js";
+import { serializeVoiceNoteForTransport } from "../utils/voiceNotes.js";
 import {
+  validateCommentSubmission,
+  validateImageUrl,
   validatePostContent,
   validatePostSubmission,
-  validateImageUrl,
-  validateTownship,
-  validateExtension
+  validateReactionType
 } from "../utils/validators.js";
 
-const ALLOWED_REACTIONS = ["like", "dislike"];
 const REACTION_KEYS = ["like", "meh", "dislike"];
+const postListeners = new Set();
+let postsCache = null;
 
 function makeError(code, field, message) {
   const error = new Error(message);
@@ -23,9 +23,260 @@ function makeError(code, field, message) {
   return error;
 }
 
+function createQueryString(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+
+    query.set(key, String(value));
+  });
+
+  const serialized = query.toString();
+  return serialized ? `?${serialized}` : "";
+}
+
+function normalizeVoiceNote(voiceNote) {
+  const pendingSync = voiceNote?.pendingSync === true;
+
+  if (
+    !voiceNote ||
+    (!pendingSync && !voiceNote.audioBase64 && !voiceNote.url && !voiceNote.storageKey)
+  ) {
+    return null;
+  }
+
+  return {
+    dataUrl: "",
+    audioBase64: typeof voiceNote.audioBase64 === "string" ? voiceNote.audioBase64 : "",
+    url: typeof voiceNote.url === "string" ? voiceNote.url : "",
+    storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey : "",
+    mimeType: typeof voiceNote.mimeType === "string" ? voiceNote.mimeType : "audio/webm",
+    durationMs: Number.isFinite(voiceNote.durationMs) ? Number(voiceNote.durationMs) : 0,
+    size: Number.isFinite(voiceNote.size) ? Number(voiceNote.size) : 0,
+    waveform: Array.isArray(voiceNote.waveform) ? voiceNote.waveform : [],
+    pendingSync
+  };
+}
+
+function createReactionRecord(reactions = {}) {
+  return {
+    like: Array.isArray(reactions.like) ? [...reactions.like] : [],
+    meh: Array.isArray(reactions.meh) ? [...reactions.meh] : [],
+    dislike: Array.isArray(reactions.dislike) ? [...reactions.dislike] : []
+  };
+}
+
+function normalizeCommentRecord(comment = {}) {
+  const author = comment.author ? upsertUser(comment.author) : null;
+
+  return {
+    ...comment,
+    id: typeof comment.id === "string" ? comment.id : "",
+    postId: typeof comment.postId === "string" ? comment.postId : "",
+    userId: typeof comment.userId === "string" ? comment.userId : author?.id || "",
+    parentId: typeof comment.parentId === "string" ? comment.parentId : null,
+    content: typeof comment.content === "string" ? comment.content : "",
+    reactions: createReactionRecord(comment.reactions),
+    voiceNote: normalizeVoiceNote(comment.voiceNote),
+    createdAt:
+      typeof comment.createdAt === "string" && comment.createdAt
+        ? comment.createdAt
+        : new Date().toISOString(),
+    updatedAt:
+      typeof comment.updatedAt === "string" && comment.updatedAt ? comment.updatedAt : null,
+    author
+  };
+}
+
+function normalizePostRecord(post = {}) {
+  const author = post.author ? upsertUser(post.author) : null;
+  const comments = Array.isArray(post.comments)
+    ? post.comments.map((comment) => normalizeCommentRecord(comment))
+    : [];
+
+  return {
+    ...post,
+    id: typeof post.id === "string" ? post.id : "",
+    userId: typeof post.userId === "string" ? post.userId : author?.id || "",
+    content: typeof post.content === "string" ? post.content : "",
+    image: typeof post.image === "string" ? post.image : post.imageUrl || "",
+    imageUrl: typeof post.imageUrl === "string" ? post.imageUrl : post.image || "",
+    location: {
+      township: typeof post.location?.township === "string" ? post.location.township : "",
+      extension: typeof post.location?.extension === "string" ? post.location.extension : ""
+    },
+    voiceNote: normalizeVoiceNote(post.voiceNote),
+    reactions: createReactionRecord(post.reactions),
+    comments,
+    commentCount: Number.isFinite(post.commentCount) ? Number(post.commentCount) : comments.length,
+    createdAt:
+      typeof post.createdAt === "string" && post.createdAt
+        ? post.createdAt
+        : new Date().toISOString(),
+    updatedAt:
+      typeof post.updatedAt === "string" && post.updatedAt ? post.updatedAt : null,
+    author
+  };
+}
+
+function normalizePostRecords(posts = []) {
+  return Array.isArray(posts) ? posts.map((post) => normalizePostRecord(post)) : [];
+}
+
+function sanitizeVoiceNoteForStorage(voiceNote) {
+  const normalizedVoiceNote = normalizeVoiceNote(voiceNote);
+
+  if (!normalizedVoiceNote) {
+    return null;
+  }
+
+  const remoteUrl =
+    typeof normalizedVoiceNote.url === "string" ? normalizedVoiceNote.url.trim() : "";
+
+  return {
+    ...normalizedVoiceNote,
+    audioBase64: "",
+    pendingSync: !/^https?:\/\//i.test(remoteUrl)
+  };
+}
+
+function sanitizeCommentRecordForStorage(comment = {}) {
+  return {
+    ...comment,
+    voiceNote: sanitizeVoiceNoteForStorage(comment.voiceNote)
+  };
+}
+
+function sanitizePostRecordForStorage(post = {}) {
+  return {
+    ...post,
+    voiceNote: sanitizeVoiceNoteForStorage(post.voiceNote),
+    comments: Array.isArray(post.comments)
+      ? post.comments.map((comment) => sanitizeCommentRecordForStorage(comment))
+      : []
+  };
+}
+
+function sanitizePostsForStorage(posts = []) {
+  return Array.isArray(posts) ? posts.map((post) => sanitizePostRecordForStorage(post)) : [];
+}
+
+function sortPosts(posts = []) {
+  return [...posts].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+function getCachedPosts() {
+  if (!Array.isArray(postsCache)) {
+    postsCache = sortPosts(normalizePostRecords(storage.get(STORAGE_KEYS.POSTS, [])));
+  }
+
+  return postsCache;
+}
+
+function emitPostChange(posts) {
+  postListeners.forEach((listener) => {
+    try {
+      listener(posts);
+    } catch {
+      // Ignore listener errors so post cache updates continue.
+    }
+  });
+}
+
+function mergePostCollections(existingPosts, incomingPosts) {
+  const postsById = new Map(existingPosts.map((post) => [post.id, post]));
+
+  incomingPosts.forEach((post) => {
+    postsById.set(post.id, {
+      ...(postsById.get(post.id) || {}),
+      ...post
+    });
+  });
+
+  return sortPosts(Array.from(postsById.values()));
+}
+
+function saveNormalizedPosts(posts) {
+  const nextPosts = sortPosts(normalizePostRecords(posts));
+  const previousPosts = sortPosts(normalizePostRecords(getCachedPosts()));
+
+  if (JSON.stringify(previousPosts) === JSON.stringify(nextPosts)) {
+    return nextPosts;
+  }
+
+  postsCache = nextPosts;
+  storage.set(STORAGE_KEYS.POSTS, sanitizePostsForStorage(nextPosts));
+  emitPostChange(nextPosts);
+  return nextPosts;
+}
+
+function replaceCachedPost(post) {
+  const normalizedPost = normalizePostRecord(post);
+  const mergedPosts = mergePostCollections(getPosts(), [normalizedPost]);
+  saveNormalizedPosts(mergedPosts);
+  return normalizedPost;
+}
+
+function syncCachedPosts(posts, { replace = false } = {}) {
+  const normalizedPosts = normalizePostRecords(posts);
+
+  if (replace) {
+    saveNormalizedPosts(normalizedPosts);
+    return sortPosts(normalizedPosts);
+  }
+
+  const mergedPosts = mergePostCollections(getPosts(), normalizedPosts);
+  saveNormalizedPosts(mergedPosts);
+  return mergedPosts;
+}
+
+function removeCachedPost(postId) {
+  const nextPosts = getPosts().filter((post) => post.id !== postId);
+  saveNormalizedPosts(nextPosts);
+  return true;
+}
+
+function collectCommentBranchIds(comments, rootCommentId) {
+  const ids = new Set([rootCommentId]);
+  let foundNewChild = true;
+
+  while (foundNewChild) {
+    foundNewChild = false;
+
+    comments.forEach((comment) => {
+      if (comment.parentId && ids.has(comment.parentId) && !ids.has(comment.id)) {
+        ids.add(comment.id);
+        foundNewChild = true;
+      }
+    });
+  }
+
+  return ids;
+}
+
+function updateCachedPostComments(postId, updater) {
+  const post = getPostById(postId);
+
+  if (!post) {
+    return null;
+  }
+
+  const nextComments = updater(Array.isArray(post.comments) ? [...post.comments] : []);
+  const nextPost = {
+    ...post,
+    comments: nextComments,
+    commentCount: nextComments.length
+  };
+
+  replaceCachedPost(nextPost);
+  return nextPost;
+}
+
 export function getPosts() {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  return posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return sortPosts(normalizePostRecords(getCachedPosts()));
 }
 
 export function filterVisiblePostsForUser(posts, userId) {
@@ -51,31 +302,82 @@ export function getVisiblePostsByUserId(userId, viewerUserId) {
 }
 
 export function savePosts(posts) {
-  storage.set(STORAGE_KEYS.POSTS, posts);
+  return saveNormalizedPosts(posts);
 }
 
-export function createAndStorePost({ userId, content = "", image = "", location, voiceNote = null }) {
+export function resetPostState() {
+  postsCache = null;
+  storage.remove(STORAGE_KEYS.POSTS);
+}
+
+export function subscribeToPostChanges(listener) {
+  if (typeof listener !== "function") {
+    return () => {};
+  }
+
+  postListeners.add(listener);
+
+  return () => {
+    postListeners.delete(listener);
+  };
+}
+
+export async function loadFeedPosts({ limit } = {}) {
+  const response = await apiRequest(`/posts/feed${createQueryString({ limit })}`);
+  return syncCachedPosts(response.posts || [], { replace: true });
+}
+
+export async function loadPostsByUserId(userId, { limit } = {}) {
+  const response = await apiRequest(
+    `/posts/user/${encodeURIComponent(userId)}${createQueryString({ limit })}`
+  );
+
+  return syncCachedPosts(response.posts || []);
+}
+
+export async function loadPostById(postId) {
+  const response = await apiRequest(`/posts/${encodeURIComponent(postId)}`);
+  return replaceCachedPost(response.post);
+}
+
+export async function searchPostsRemote(query, { limit } = {}) {
+  const normalizedQuery = String(query ?? "").trim();
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const response = await apiRequest(
+    `/posts/search${createQueryString({
+      query: normalizedQuery,
+      limit
+    })}`
+  );
+
+  const posts = normalizePostRecords(response.posts || []);
+  syncCachedPosts(posts);
+  return posts;
+}
+
+export async function createAndStorePost({ content = "", image = "", voiceNote = null }) {
   const safePost = validatePostSubmission({
     content,
     voiceNote
   });
-  const post = createPost({
-    userId,
-    content: safePost.content,
-    image,
-    location,
-    voiceNote: safePost.voiceNote
+  const response = await apiRequest("/posts", {
+    method: "POST",
+    body: {
+      content: safePost.content,
+      image,
+      voiceNote: serializeVoiceNoteForTransport(safePost.voiceNote)
+    }
   });
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
 
-  posts.push(post);
-  savePosts(posts);
-
-  return post;
+  return replaceCachedPost(response.post);
 }
 
 export function getPostById(postId) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
+  const posts = getPosts();
   return posts.find((post) => post.id === postId) || null;
 }
 
@@ -83,201 +385,90 @@ export function getPostsByUserId(userId) {
   return getPosts().filter((post) => post.userId === userId);
 }
 
-export function updatePost({
-  postId,
-  userId,
-  content,
-  image = "",
-  location
-}) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
+export async function updatePost({ postId, content, image = "" }) {
+  const response = await apiRequest(`/posts/${encodeURIComponent(postId)}`, {
+    method: "PATCH",
+    body: {
+      content: validatePostContent(content),
+      image: validateImageUrl(image)
+    }
+  });
 
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
-
-  const existingPost = posts[postIndex];
-
-  if (existingPost.userId !== userId) {
-    throw makeError("POST_EDIT_FORBIDDEN", null, "You can only edit your own post.");
-  }
-
-  const updatedPost = {
-    ...existingPost,
-    content: validatePostContent(content),
-    image: validateImageUrl(image),
-    location: {
-      township: validateTownship(location.township),
-      extension: validateExtension(location.extension)
-    },
-    updatedAt: new Date().toISOString()
-  };
-
-  posts[postIndex] = updatedPost;
-  savePosts(posts);
-
-  return updatedPost;
+  return replaceCachedPost(response.post);
 }
 
-export function deletePost({ postId, userId }) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const targetPost = posts.find((post) => post.id === postId);
-
-  if (!targetPost) {
+export async function deletePost({ postId }) {
+  if (!postId) {
     throw makeError("POST_NOT_FOUND", null, "Post not found.");
   }
 
-  if (targetPost.userId !== userId) {
-    throw makeError("POST_DELETE_FORBIDDEN", null, "You can only delete your own post.");
-  }
-
-  const nextPosts = posts.filter((post) => post.id !== postId);
-  savePosts(nextPosts);
+  await apiRequest(`/posts/${encodeURIComponent(postId)}`, {
+    method: "DELETE"
+  });
+  removeCachedPost(postId);
 
   return true;
 }
 
-export function addCommentToPost({
+export async function addCommentToPost({
   postId,
-  userId,
   parentId = null,
   content,
   voiceNote = null
 }) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
-
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
-
-  const post = posts[postIndex];
-  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
-  const parentComment =
-    parentId !== null ? comments.find((comment) => comment.id === parentId) || null : null;
-
-  if (parentId !== null) {
-    if (!parentComment) {
-      throw makeError("COMMENT_PARENT_NOT_FOUND", null, "Parent comment not found.");
-    }
-  }
-
-  const comment = createComment({
-    postId,
-    userId,
-    parentId,
+  const safeComment = validateCommentSubmission({
     content,
     voiceNote
   });
-
-  posts[postIndex] = {
-    ...post,
-    comments: [...comments, comment]
-  };
-
-  savePosts(posts);
-
-  if (parentComment) {
-    if (parentComment.userId !== userId && areNotificationsEnabled(parentComment.userId)) {
-      createNotification({
-        userId: parentComment.userId,
-        type: "comment_reply",
-        actorUserId: userId,
-        postId,
-        commentId: comment.id,
-        title: "New reply",
-        text: ""
-      });
+  const response = await apiRequest(`/posts/${encodeURIComponent(postId)}/comments`, {
+    method: "POST",
+    body: {
+      parentId,
+      content: safeComment.content,
+      voiceNote: serializeVoiceNoteForTransport(safeComment.voiceNote)
     }
-  } else if (post.userId !== userId && areNotificationsEnabled(post.userId)) {
-    createNotification({
-      userId: post.userId,
-      type: "post_comment",
-      actorUserId: userId,
-      postId,
-      commentId: comment.id,
-      title: "New comment",
-      text: ""
-    });
-  }
+  });
+  const comment = normalizeCommentRecord(response.comment);
+
+  updateCachedPostComments(postId, (comments) => [...comments, comment]);
 
   return comment;
 }
 
-export function updateCommentInPost({ postId, commentId, userId, content }) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
+export async function updateCommentInPost({ postId, commentId, content }) {
+  const response = await apiRequest(
+    `/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+    {
+      method: "PATCH",
+      body: {
+        content: validatePostContent(content)
+      }
+    }
+  );
+  const updatedComment = normalizeCommentRecord(response.comment);
 
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
+  updateCachedPostComments(postId, (comments) =>
+    comments.map((comment) =>
+      comment.id === updatedComment.id ? { ...comment, ...updatedComment } : comment
+    )
+  );
 
-  const post = posts[postIndex];
-  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
-  const commentIndex = comments.findIndex((comment) => comment.id === commentId);
-
-  if (commentIndex === -1) {
-    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
-  }
-
-  const existingComment = comments[commentIndex];
-
-  if (existingComment.userId !== userId) {
-    throw makeError(
-      "COMMENT_EDIT_FORBIDDEN",
-      null,
-      "You can only edit your own comment."
-    );
-  }
-
-  comments[commentIndex] = {
-    ...existingComment,
-    content: validatePostContent(content),
-    updatedAt: new Date().toISOString()
-  };
-
-  posts[postIndex] = {
-    ...post,
-    comments
-  };
-
-  savePosts(posts);
-  return comments[commentIndex];
+  return updatedComment;
 }
 
-export function deleteCommentFromPost({ postId, commentId, userId }) {
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
+export async function deleteCommentFromPost({ postId, commentId }) {
+  await apiRequest(
+    `/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+    {
+      method: "DELETE"
+    }
+  );
 
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
+  updateCachedPostComments(postId, (comments) => {
+    const commentIdsToDelete = collectCommentBranchIds(comments, commentId);
+    return comments.filter((comment) => !commentIdsToDelete.has(comment.id));
+  });
 
-  const post = posts[postIndex];
-  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
-  const targetComment = comments.find((comment) => comment.id === commentId);
-
-  if (!targetComment) {
-    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
-  }
-
-  if (targetComment.userId !== userId) {
-    throw makeError(
-      "COMMENT_DELETE_FORBIDDEN",
-      null,
-      "You can only delete your own comment."
-    );
-  }
-
-  const commentIdsToDelete = collectCommentBranchIds(comments, commentId);
-
-  posts[postIndex] = {
-    ...post,
-    comments: comments.filter((comment) => !commentIdsToDelete.has(comment.id))
-  };
-
-  savePosts(posts);
   return true;
 }
 
@@ -289,7 +480,10 @@ export function getCommentsForPost(postOrId) {
   }
 
   const post = getPostById(postId);
-  if (!post) return [];
+  if (!post) {
+    return [];
+  }
+
   return Array.isArray(post.comments) ? post.comments : [];
 }
 
@@ -331,84 +525,38 @@ export function getVisibleCommentsForPost(postOrId, userId) {
   return comments.filter((comment) => !hiddenBranchIds.has(comment.id));
 }
 
-export function setPostReaction({ postId, userId, reactionType }) {
-  if (!ALLOWED_REACTIONS.includes(reactionType)) {
-    throw makeError("REACTION_INVALID", null, "Invalid reaction type.");
-  }
-
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
-
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
-
-  const post = posts[postIndex];
-  const reactions = createReactionRecord(post.reactions);
-
-  const alreadyActive = reactions[reactionType].includes(userId);
-
-  REACTION_KEYS.forEach((type) => {
-    reactions[type] = reactions[type].filter((id) => id !== userId);
+export async function setPostReaction({ postId, reactionType }) {
+  const safeReactionType = validateReactionType(reactionType);
+  const response = await apiRequest(`/posts/${encodeURIComponent(postId)}/reactions`, {
+    method: "POST",
+    body: {
+      reactionType: safeReactionType
+    }
   });
 
-  if (!alreadyActive) {
-    reactions[reactionType].push(userId);
-  }
-
-  posts[postIndex] = {
-    ...post,
-    reactions
-  };
-
-  savePosts(posts);
-  return posts[postIndex];
+  return replaceCachedPost(response.post);
 }
 
-export function setCommentReaction({ postId, commentId, userId, reactionType }) {
-  if (!ALLOWED_REACTIONS.includes(reactionType)) {
-    throw makeError("REACTION_INVALID", null, "Invalid reaction type.");
-  }
+export async function setCommentReaction({ postId, commentId, reactionType }) {
+  const safeReactionType = validateReactionType(reactionType);
+  const response = await apiRequest(
+    `/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/reactions`,
+    {
+      method: "POST",
+      body: {
+        reactionType: safeReactionType
+      }
+    }
+  );
+  const updatedComment = normalizeCommentRecord(response.comment);
 
-  const posts = storage.get(STORAGE_KEYS.POSTS, []);
-  const postIndex = posts.findIndex((post) => post.id === postId);
+  updateCachedPostComments(postId, (comments) =>
+    comments.map((comment) =>
+      comment.id === updatedComment.id ? { ...comment, ...updatedComment } : comment
+    )
+  );
 
-  if (postIndex === -1) {
-    throw makeError("POST_NOT_FOUND", null, "Post not found.");
-  }
-
-  const post = posts[postIndex];
-  const comments = Array.isArray(post.comments) ? [...post.comments] : [];
-  const commentIndex = comments.findIndex((comment) => comment.id === commentId);
-
-  if (commentIndex === -1) {
-    throw makeError("COMMENT_NOT_FOUND", null, "Comment not found.");
-  }
-
-  const comment = comments[commentIndex];
-  const reactions = createReactionRecord(comment.reactions);
-  const alreadyActive = reactions[reactionType].includes(userId);
-
-  REACTION_KEYS.forEach((type) => {
-    reactions[type] = reactions[type].filter((id) => id !== userId);
-  });
-
-  if (!alreadyActive) {
-    reactions[reactionType].push(userId);
-  }
-
-  comments[commentIndex] = {
-    ...comment,
-    reactions
-  };
-
-  posts[postIndex] = {
-    ...post,
-    comments
-  };
-
-  savePosts(posts);
-  return comments[commentIndex];
+  return updatedComment;
 }
 
 export function getUserReaction(post, userId) {
@@ -419,39 +567,18 @@ export function getCommentUserReaction(comment, userId) {
   return getActiveReaction(comment, userId);
 }
 
-function collectCommentBranchIds(comments, rootCommentId) {
-  const ids = new Set([rootCommentId]);
-  let foundNewChild = true;
-
-  while (foundNewChild) {
-    foundNewChild = false;
-
-    comments.forEach((comment) => {
-      if (comment.parentId && ids.has(comment.parentId) && !ids.has(comment.id)) {
-        ids.add(comment.id);
-        foundNewChild = true;
-      }
-    });
-  }
-
-  return ids;
-}
-
-function createReactionRecord(reactions = {}) {
-  return {
-    like: Array.isArray(reactions.like) ? [...reactions.like] : [],
-    meh: Array.isArray(reactions.meh) ? [...reactions.meh] : [],
-    dislike: Array.isArray(reactions.dislike) ? [...reactions.dislike] : []
-  };
-}
-
 function getActiveReaction(entity, userId) {
   if (!entity?.reactions || !userId) {
     return null;
   }
 
-  if (entity.reactions.like?.includes(userId)) return "like";
-  if (entity.reactions.dislike?.includes(userId)) return "dislike";
+  if (entity.reactions.like?.includes(userId)) {
+    return "like";
+  }
+
+  if (entity.reactions.dislike?.includes(userId)) {
+    return "dislike";
+  }
 
   return null;
 }

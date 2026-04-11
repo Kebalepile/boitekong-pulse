@@ -1,28 +1,42 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
-import { createUser } from "../models/userModel.js";
-import { createNotification } from "./notificationService.js";
-import {
-  validateUsername,
-  validatePhoneNumber,
-  validateTownship,
-  validateExtension
-} from "../utils/validators.js";
+import { apiRequest } from "./apiClient.js";
+import { normalizeUserDirectMessageEncryption } from "../utils/directMessageEncryption.js";
 
-function makeError(code, field, message) {
-  const error = new Error(message);
-  error.code = code;
-  error.field = field;
-  return error;
+function createQueryString(params = {}) {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+
+    query.set(key, String(value));
+  });
+
+  const serialized = query.toString();
+  return serialized ? `?${serialized}` : "";
 }
 
 function normalizeUserRecord(user = {}) {
+  const avatarDataUrl =
+    typeof user.avatarDataUrl === "string" && user.avatarDataUrl
+      ? user.avatarDataUrl
+      : typeof user.avatarUrl === "string"
+        ? user.avatarUrl
+        : "";
+
   return {
     ...user,
-    avatarDataUrl: typeof user.avatarDataUrl === "string" ? user.avatarDataUrl : "",
+    avatarDataUrl,
+    avatarUrl:
+      typeof user.avatarUrl === "string" && user.avatarUrl ? user.avatarUrl : avatarDataUrl,
     phoneNumber: typeof user.phoneNumber === "string" ? user.phoneNumber : "",
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
+    directMessageEncryption: normalizeUserDirectMessageEncryption(
+      user.directMessageEncryption
+    ),
     blockedUserIds: Array.isArray(user.blockedUserIds)
       ? Array.from(
           new Set(
@@ -41,10 +55,18 @@ function normalizeUserRecord(user = {}) {
           )
         )
       : [],
+    location: {
+      township: typeof user.location?.township === "string" ? user.location.township : "",
+      extension: typeof user.location?.extension === "string" ? user.location.extension : ""
+    },
     createdAt:
       typeof user.createdAt === "string" && user.createdAt
         ? user.createdAt
-        : new Date().toISOString()
+        : new Date().toISOString(),
+    updatedAt:
+      typeof user.updatedAt === "string" && user.updatedAt
+        ? user.updatedAt
+        : null
   };
 }
 
@@ -54,24 +76,43 @@ export function getUsers() {
 }
 
 export function saveUsers(users) {
-  storage.set(STORAGE_KEYS.USERS, users);
+  storage.set(
+    STORAGE_KEYS.USERS,
+    Array.isArray(users) ? users.map(normalizeUserRecord) : []
+  );
 }
 
-export function findUserByUsername(username) {
-  const users = getUsers();
-  const normalized = validateUsername(username).toLowerCase();
-  return users.find((user) => user.username.toLowerCase() === normalized) || null;
+export function upsertUsers(users = []) {
+  const incomingUsers = Array.isArray(users)
+    ? users
+        .map(normalizeUserRecord)
+        .filter((user) => typeof user.id === "string" && user.id.trim())
+    : [];
+
+  if (incomingUsers.length === 0) {
+    return [];
+  }
+
+  const usersById = new Map(getUsers().map((user) => [user.id, user]));
+
+  incomingUsers.forEach((user) => {
+    usersById.set(user.id, {
+      ...(usersById.get(user.id) || {}),
+      ...user
+    });
+  });
+
+  const nextUsers = Array.from(usersById.values());
+  saveUsers(nextUsers);
+  return incomingUsers.map((user) => usersById.get(user.id));
 }
 
-export function findUserByPhoneNumber(phoneNumber) {
-  const users = getUsers();
-  const normalized = validatePhoneNumber(phoneNumber);
-
-  if (!normalized) {
+export function upsertUser(user) {
+  if (!user) {
     return null;
   }
 
-  return users.find((user) => user.phoneNumber === normalized) || null;
+  return upsertUsers([user])[0] || null;
 }
 
 export function findUserById(userId) {
@@ -79,94 +120,14 @@ export function findUserById(userId) {
   return users.find((user) => user.id === userId) || null;
 }
 
-export function createAndStoreUser({ username, location, passwordHash, phoneNumber = "" }) {
-  const existingUser = findUserByUsername(username);
-
-  if (existingUser) {
-    throw makeError("USERNAME_EXISTS", "username", "Username already exists.");
-  }
-
-  const safePhoneNumber = validatePhoneNumber(phoneNumber);
-
-  if (safePhoneNumber && findUserByPhoneNumber(safePhoneNumber)) {
-    throw makeError("PHONE_NUMBER_EXISTS", "phoneNumber", "Phone number already exists.");
-  }
-
-  const user = createUser({ username, location, passwordHash, phoneNumber: safePhoneNumber });
-  const users = getUsers();
-
-  users.push(user);
-  saveUsers(users);
-
-  return user;
-}
-
-export function updateUserProfile({
-  userId,
-  username,
-  phoneNumber,
-  township,
-  extension,
-  passwordHash,
-  avatarDataUrl
-}) {
-  const users = getUsers();
-  const userIndex = users.findIndex((user) => user.id === userId);
-
-  if (userIndex === -1) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const safeUsername = validateUsername(username);
-  const safePhoneNumber = validatePhoneNumber(phoneNumber);
-  const safeTownship = validateTownship(township);
-  const safeExtension = validateExtension(extension);
-
-  const usernameTakenByAnotherUser = users.some(
-    (user) => user.id !== userId && user.username.toLowerCase() === safeUsername.toLowerCase()
-  );
-
-  if (usernameTakenByAnotherUser) {
-    throw makeError("USERNAME_EXISTS", "username", "Username already exists.");
-  }
-
-  const phoneTakenByAnotherUser = safePhoneNumber
-    ? users.some((user) => user.id !== userId && user.phoneNumber === safePhoneNumber)
-    : false;
-
-  if (phoneTakenByAnotherUser) {
-    throw makeError("PHONE_NUMBER_EXISTS", "phoneNumber", "Phone number already exists.");
-  }
-
-  const currentRecord = users[userIndex];
-
-  const updatedUser = {
-    ...currentRecord,
-    username: safeUsername,
-    phoneNumber: safePhoneNumber,
-    location: {
-      township: safeTownship,
-      extension: safeExtension
-    },
-    avatarDataUrl:
-      typeof avatarDataUrl === "string"
-        ? avatarDataUrl
-        : currentRecord.avatarDataUrl || ""
-  };
-
-  if (passwordHash) {
-    updatedUser.passwordHash = passwordHash;
-  }
-
-  users[userIndex] = updatedUser;
-  saveUsers(users);
-  setCurrentUser(updatedUser);
-
-  return updatedUser;
-}
-
 export function setCurrentUser(user) {
-  storage.set(STORAGE_KEYS.CURRENT_USER, user ? normalizeUserRecord(user) : null);
+  const normalizedUser = user ? normalizeUserRecord(user) : null;
+
+  if (normalizedUser) {
+    upsertUser(normalizedUser);
+  }
+
+  storage.set(STORAGE_KEYS.CURRENT_USER, normalizedUser);
 }
 
 export function getCurrentUser() {
@@ -213,130 +174,6 @@ export function isFollowingUser({ currentUserId, targetUserId }) {
   return Boolean(currentUser?.followingUserIds.includes(targetUserId));
 }
 
-export function followUser({ currentUserId, targetUserId }) {
-  if (!currentUserId || !targetUserId) {
-    throw makeError("FOLLOW_INVALID", null, "Could not follow that user.");
-  }
-
-  if (currentUserId === targetUserId) {
-    throw makeError("FOLLOW_SELF", null, "You cannot follow yourself.");
-  }
-
-  const users = getUsers();
-  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
-  const targetUser = users.find((user) => user.id === targetUserId);
-
-  if (currentUserIndex === -1 || !targetUser) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const currentUser = users[currentUserIndex];
-
-  if (currentUser.followingUserIds.includes(targetUserId)) {
-    return currentUser;
-  }
-
-  const updatedUser = {
-    ...currentUser,
-    followingUserIds: [...currentUser.followingUserIds, targetUserId]
-  };
-
-  users[currentUserIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === currentUserId) {
-    setCurrentUser(updatedUser);
-  }
-
-  if (currentUserId !== targetUserId && areNotificationsEnabled(targetUserId)) {
-    createNotification({
-      userId: targetUserId,
-      type: "follow",
-      actorUserId: currentUserId,
-      title: "New follower",
-      text: ""
-    });
-  }
-
-  return updatedUser;
-}
-
-export function unfollowUser({ currentUserId, targetUserId }) {
-  if (!currentUserId || !targetUserId) {
-    throw makeError("FOLLOW_INVALID", null, "Could not update follow state.");
-  }
-
-  const users = getUsers();
-  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
-
-  if (currentUserIndex === -1) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const currentUser = users[currentUserIndex];
-  const updatedUser = {
-    ...currentUser,
-    followingUserIds: currentUser.followingUserIds.filter(
-      (followedUserId) => followedUserId !== targetUserId
-    )
-  };
-
-  users[currentUserIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === currentUserId) {
-    setCurrentUser(updatedUser);
-  }
-
-  return updatedUser;
-}
-
-export function setDirectMessagesEnabled({ userId, enabled }) {
-  const users = getUsers();
-  const userIndex = users.findIndex((user) => user.id === userId);
-
-  if (userIndex === -1) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const updatedUser = {
-    ...users[userIndex],
-    directMessagesEnabled: enabled !== false
-  };
-
-  users[userIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === userId) {
-    setCurrentUser(updatedUser);
-  }
-
-  return updatedUser;
-}
-
-export function setNotificationsEnabled({ userId, enabled }) {
-  const users = getUsers();
-  const userIndex = users.findIndex((user) => user.id === userId);
-
-  if (userIndex === -1) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const updatedUser = {
-    ...users[userIndex],
-    notificationsEnabled: enabled !== false
-  };
-
-  users[userIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === userId) {
-    setCurrentUser(updatedUser);
-  }
-
-  return updatedUser;
-}
-
 export function areNotificationsEnabled(userId) {
   if (!userId) {
     return false;
@@ -353,74 +190,6 @@ export function isUserBlocked({ currentUserId, targetUserId }) {
 
   const currentUser = findUserById(currentUserId);
   return Boolean(currentUser?.blockedUserIds.includes(targetUserId));
-}
-
-export function blockUser({ currentUserId, targetUserId }) {
-  if (!currentUserId || !targetUserId) {
-    throw makeError("BLOCK_INVALID", null, "Could not block that user.");
-  }
-
-  if (currentUserId === targetUserId) {
-    throw makeError("BLOCK_SELF", null, "You cannot block yourself.");
-  }
-
-  const users = getUsers();
-  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
-  const targetUser = users.find((user) => user.id === targetUserId);
-
-  if (currentUserIndex === -1 || !targetUser) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const currentUser = users[currentUserIndex];
-
-  if (currentUser.blockedUserIds.includes(targetUserId)) {
-    return currentUser;
-  }
-
-  const updatedUser = {
-    ...currentUser,
-    blockedUserIds: [...currentUser.blockedUserIds, targetUserId]
-  };
-
-  users[currentUserIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === currentUserId) {
-    setCurrentUser(updatedUser);
-  }
-
-  return updatedUser;
-}
-
-export function unblockUser({ currentUserId, targetUserId }) {
-  if (!currentUserId || !targetUserId) {
-    throw makeError("BLOCK_INVALID", null, "Could not unblock that user.");
-  }
-
-  const users = getUsers();
-  const currentUserIndex = users.findIndex((user) => user.id === currentUserId);
-
-  if (currentUserIndex === -1) {
-    throw makeError("USER_NOT_FOUND", null, "User not found.");
-  }
-
-  const currentUser = users[currentUserIndex];
-  const updatedUser = {
-    ...currentUser,
-    blockedUserIds: currentUser.blockedUserIds.filter(
-      (blockedUserId) => blockedUserId !== targetUserId
-    )
-  };
-
-  users[currentUserIndex] = updatedUser;
-  saveUsers(users);
-
-  if (getCurrentUser()?.id === currentUserId) {
-    setCurrentUser(updatedUser);
-  }
-
-  return updatedUser;
 }
 
 export function getDirectMessageAvailability({ senderUserId, recipientUserId }) {
@@ -480,4 +249,162 @@ export function getDirectMessageAvailability({ senderUserId, recipientUserId }) 
     code: "DM_ALLOWED",
     message: ""
   };
+}
+
+export async function syncCurrentUserFromApi() {
+  const response = await apiRequest("/auth/me");
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function fetchUserProfile(userId) {
+  const response = await apiRequest(`/users/${encodeURIComponent(userId)}`);
+  const user = upsertUser(response.user);
+
+  return {
+    user,
+    stats: response.stats || {
+      followerCount: getFollowerCount(userId),
+      followingCount: Array.isArray(user?.followingUserIds) ? user.followingUserIds.length : 0,
+      isCurrentUser: getCurrentUser()?.id === userId,
+      isFollowing: isFollowingUser({
+        currentUserId: getCurrentUser()?.id || "",
+        targetUserId: userId
+      })
+    }
+  };
+}
+
+export async function searchUsersRemote(query, { limit } = {}) {
+  const normalizedQuery = String(query ?? "").trim();
+
+  const response = await apiRequest(
+    `/users/search${createQueryString({
+      query: normalizedQuery,
+      limit
+    })}`
+  );
+
+  return upsertUsers(response.users || []);
+}
+
+export async function loadUserDirectory({ limit } = {}) {
+  return searchUsersRemote("", { limit });
+}
+
+export async function fetchFollowerUsers(userId, { limit } = {}) {
+  const response = await apiRequest(
+    `/users/${encodeURIComponent(userId)}/followers${createQueryString({ limit })}`
+  );
+
+  return upsertUsers(response.users || []);
+}
+
+export async function fetchFollowingUsers(userId, { limit } = {}) {
+  const response = await apiRequest(
+    `/users/${encodeURIComponent(userId)}/following${createQueryString({ limit })}`
+  );
+
+  return upsertUsers(response.users || []);
+}
+
+export async function updateUserProfileRemote({
+  username,
+  phoneNumber,
+  township,
+  extension,
+  avatarDataUrl,
+  avatarUrl,
+  currentPassword,
+  newPassword,
+  confirmNewPassword
+}) {
+  const response = await apiRequest("/users/me/profile", {
+    method: "PATCH",
+    body: {
+      username,
+      phoneNumber,
+      township,
+      extension,
+      avatarUrl: avatarDataUrl ?? avatarUrl ?? "",
+      currentPassword,
+      newPassword,
+      confirmNewPassword
+    }
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function followUserRemote({ targetUserId }) {
+  const response = await apiRequest(`/users/${encodeURIComponent(targetUserId)}/follow`, {
+    method: "POST"
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function unfollowUserRemote({ targetUserId }) {
+  const response = await apiRequest(`/users/${encodeURIComponent(targetUserId)}/follow`, {
+    method: "DELETE"
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function blockUserRemote({ targetUserId }) {
+  const response = await apiRequest(`/users/${encodeURIComponent(targetUserId)}/block`, {
+    method: "POST"
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function unblockUserRemote({ targetUserId }) {
+  const response = await apiRequest(`/users/${encodeURIComponent(targetUserId)}/block`, {
+    method: "DELETE"
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function setDirectMessagesEnabledRemote({ enabled }) {
+  const response = await apiRequest("/users/me/settings/direct-messages", {
+    method: "PATCH",
+    body: {
+      enabled
+    }
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function setNotificationsEnabledRemote({ enabled }) {
+  const response = await apiRequest("/users/me/settings/notifications", {
+    method: "PATCH",
+    body: {
+      enabled
+    }
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function getDirectMessageAvailabilityRemote({ recipientUserId }) {
+  const response = await apiRequest(
+    `/users/${encodeURIComponent(recipientUserId)}/dm-availability`
+  );
+
+  return response.availability || getDirectMessageAvailability({
+    senderUserId: getCurrentUser()?.id || "",
+    recipientUserId
+  });
 }

@@ -188,12 +188,14 @@ export function showReportSheet({
     reasonGroup.appendChild(button);
   });
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
     error.textContent = "";
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
 
     try {
-      const result = createReport({
+      const result = await createReport({
         reporterUserId,
         targetType,
         targetId,
@@ -230,6 +232,8 @@ export function showReportSheet({
       );
     } catch (reportError) {
       error.textContent = reportError.message || "Could not submit report.";
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Submit report";
     }
   });
 

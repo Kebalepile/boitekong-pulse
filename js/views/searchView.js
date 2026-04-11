@@ -1,17 +1,23 @@
 import { clearElement, createElement } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
 import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
+import { registerViewCleanup } from "../router.js";
 import { searchUsers, searchPosts } from "../services/searchService.js";
 import {
   filterVisiblePostsForUser,
-  getVisiblePostsByUserId
+  getPosts,
+  getVisiblePostsByUserId,
+  loadPostsByUserId,
+  subscribeToPostChanges
 } from "../services/postService.js";
 import { createPostCard } from "../components/postCard.js";
-import { findUserById } from "../services/userService.js";
+import { findUserById, getUsers } from "../services/userService.js";
 import { createAvatarElement } from "../utils/avatar.js";
 import { SEARCH_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
+import { setLiveSyncOptions } from "../services/liveSyncService.js";
+import { showToast } from "../components/toast.js";
 
-export function renderSearch(app, currentUser, payload = null) {
+export async function renderSearch(app, currentUser, payload = null) {
   clearElement(app);
 
   const initialMode = payload?.mode === "users" ? "users" : "posts";
@@ -54,34 +60,46 @@ export function renderSearch(app, currentUser, payload = null) {
   const results = createElement("section", { className: "feed-list search-results-list" });
   let visibleUserCount = SEARCH_BATCH_SIZE;
   let visiblePostCount = SEARCH_BATCH_SIZE;
+  const isPostResultsView =
+    authorPostsView || (initialMode === "posts" && initialQuery.trim().length > 0);
 
   main.append(searchCard, results);
   shell.append(navbar, main);
   app.appendChild(shell);
 
+  if (isPostResultsView) {
+    setLiveSyncOptions({
+      includePosts: true
+    });
+    registerViewCleanup(() => {
+      setLiveSyncOptions({
+        includePosts: false
+      });
+    });
+    registerViewCleanup(
+      subscribeToPostChanges(() => {
+        renderCurrentPostResults();
+      })
+    );
+  }
+
   if (authorPostsView || initialQuery.trim()) {
-    runSearch();
+    await runSearch();
   } else {
     renderIdleState(results);
   }
 
-  function runSearch() {
+  async function runSearch() {
     if (authorPostsView) {
-      renderPostResults(results, getVisiblePostsByUserId(authorUserId, currentUser.id), {
-        currentUserId: currentUser.id,
-        app,
-        currentUser,
-        searchPayload: {
-          mode: "posts",
-          authorUserId,
-          authorUsername
-        },
-        visibleCount: visiblePostCount,
-        onLoadMore: () => {
-          visiblePostCount += SEARCH_BATCH_SIZE;
-          runSearch();
-        }
-      });
+      try {
+        await loadPostsByUserId(authorUserId);
+      } catch {
+        showToast(
+          "Could not fully refresh that profile's posts. Showing cached results where available.",
+          "error"
+        );
+      }
+      renderCurrentPostResults();
       return;
     }
 
@@ -93,7 +111,19 @@ export function renderSearch(app, currentUser, payload = null) {
     }
 
     if (initialMode === "users") {
-      renderUserResults(results, searchUsers(query), {
+      let users = [];
+
+      try {
+        users = await searchUsers(query);
+      } catch {
+        users = getMatchingUsersFromCache(query);
+        showToast(
+          "Could not refresh user search right now. Showing cached matches.",
+          "error"
+        );
+      }
+
+      renderUserResults(results, users, {
         currentUserId: currentUser.id,
         visibleCount: visibleUserCount,
         onLoadMore: () => {
@@ -104,21 +134,92 @@ export function renderSearch(app, currentUser, payload = null) {
       return;
     }
 
-    renderPostResults(results, filterVisiblePostsForUser(searchPosts(query), currentUser.id), {
+    try {
+      await searchPosts(query);
+    } catch {
+      showToast(
+        "Could not refresh post search right now. Showing cached matches.",
+        "error"
+      );
+    }
+
+    renderCurrentPostResults();
+  }
+
+  function renderCurrentPostResults() {
+    if (!isPostResultsView) {
+      return;
+    }
+
+    const posts = authorPostsView
+      ? getVisiblePostsByUserId(authorUserId, currentUser.id)
+      : getMatchingPostsFromCache(initialQuery, currentUser.id);
+
+    renderPostResults(results, posts, {
       currentUserId: currentUser.id,
       app,
       currentUser,
-      searchPayload: {
-        mode: "posts",
-        query
-      },
+      searchPayload: authorPostsView
+        ? {
+            mode: "posts",
+            authorUserId,
+            authorUsername
+          }
+        : {
+            mode: "posts",
+            query: initialQuery.trim()
+          },
       visibleCount: visiblePostCount,
       onLoadMore: () => {
         visiblePostCount += SEARCH_BATCH_SIZE;
-        runSearch();
+        renderCurrentPostResults();
       }
     });
   }
+}
+
+function getMatchingPostsFromCache(query, currentUserId) {
+  const normalizedQuery = String(query ?? "").trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return filterVisiblePostsForUser(getPosts(), currentUserId).filter((post) => {
+    const authorUsername = post.author?.username || findUserById(post.userId)?.username || "";
+    const haystack = [
+      post.content,
+      authorUsername,
+      post.location?.township || "",
+      post.location?.extension || ""
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    return haystack.includes(normalizedQuery);
+  });
+}
+
+function getMatchingUsersFromCache(query) {
+  const normalizedQuery = String(query ?? "").trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  return getUsers()
+    .filter((user) => {
+      const haystack = [
+        user.username,
+        user.location?.township || "",
+        user.location?.extension || ""
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    })
+    .sort((first, second) => first.username.localeCompare(second.username));
 }
 
 function renderIdleState(results) {
@@ -220,9 +321,9 @@ function renderPostResults(
   const visiblePosts = posts.slice(0, visibleCount);
 
   visiblePosts.forEach((post) => {
-    const author = findUserById(post.userId);
+    const author = post.author || findUserById(post.userId);
     const card = createPostCard(post, author, currentUserId, () => {
-      renderSearch(app, currentUser, searchPayload);
+      void renderSearch(app, currentUser, searchPayload);
     });
 
     results.appendChild(card);

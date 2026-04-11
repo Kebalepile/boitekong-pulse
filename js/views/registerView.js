@@ -93,7 +93,7 @@ export function renderRegister(app) {
   const legalFollow = createElement("p", {
     className: "auth-legal-copy",
     text:
-      "Your phone number is required now and can be verified later with SMS OTP once the backend is connected."
+      "Your phone number is required now and can be verified later from your profile with the SMS code flow."
   });
   const legalLinks = createElement("p", { className: "auth-legal-links" });
   legalLinks.append(

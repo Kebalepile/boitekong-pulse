@@ -1,4 +1,8 @@
-import { getAuthenticatedUser, logoutUser } from "./services/authService.js";
+import {
+  getAuthenticatedUser,
+  logoutUser,
+  resolveAuthenticatedUser
+} from "./services/authService.js";
 import { renderLogin } from "./views/loginView.js";
 import { renderRegister } from "./views/registerView.js";
 import { renderFeed } from "./views/feedView.js";
@@ -7,68 +11,138 @@ import { renderCreatePost } from "./views/createPostView.js";
 import { renderEditPost } from "./views/editPostView.js";
 import { renderSearch } from "./views/searchView.js";
 import { renderMessages } from "./views/messagesView.js";
+import { ensureConversationsLoaded } from "./services/messageService.js";
+import { loadNotifications } from "./services/notificationService.js";
+import { loadReports } from "./services/reportService.js";
+import { startLiveSync, stopLiveSync } from "./services/liveSyncService.js";
+
+let viewCleanupFns = [];
 
 function getAppRoot() {
   return document.getElementById("app");
 }
 
-function requireAuth(app, renderFn, payload) {
-  const currentUser = getAuthenticatedUser();
+function cleanupCurrentView() {
+  const pendingCleanupFns = viewCleanupFns;
+  viewCleanupFns = [];
+
+  pendingCleanupFns.forEach((cleanup) => {
+    try {
+      cleanup();
+    } catch {
+      // Ignore cleanup errors so route transitions still complete.
+    }
+  });
+}
+
+export function registerViewCleanup(cleanup) {
+  if (typeof cleanup !== "function") {
+    return () => {};
+  }
+
+  let active = true;
+  const wrappedCleanup = () => {
+    if (!active) {
+      return;
+    }
+
+    active = false;
+
+    try {
+      cleanup();
+    } catch {
+      // Ignore cleanup errors triggered manually.
+    }
+  };
+
+  viewCleanupFns.push(wrappedCleanup);
+
+  return () => {
+    viewCleanupFns = viewCleanupFns.filter((entry) => entry !== wrappedCleanup);
+    wrappedCleanup();
+  };
+}
+
+async function requireAuth(app, renderFn, payload) {
+  const currentUser = getAuthenticatedUser() || (await resolveAuthenticatedUser());
 
   if (!currentUser) {
+    stopLiveSync();
     renderLogin(app);
     return;
   }
 
-  renderFn(app, currentUser, payload);
+  startLiveSync(currentUser.id);
+
+  try {
+    await Promise.all([
+      ensureConversationsLoaded(currentUser.id),
+      loadReports({
+        currentUserId: currentUser.id,
+        force: true
+      }),
+      loadNotifications({
+        currentUserId: currentUser.id,
+        force: true
+      })
+    ]);
+  } catch {
+    // Keep rendering the current screen even if preload fails.
+  }
+
+  await renderFn(app, currentUser, payload);
 }
 
-export function navigate(routeName, payload = null) {
+export async function navigate(routeName, payload = null) {
   const app = getAppRoot();
   if (!app) return;
+  cleanupCurrentView();
 
   switch (routeName) {
     case "login":
+      stopLiveSync();
       renderLogin(app);
       return;
     case "register":
+      stopLiveSync();
       renderRegister(app);
       return;
     case "feed":
-      requireAuth(app, renderFeed, payload);
+      await requireAuth(app, renderFeed, payload);
       return;
     case "profile":
-      requireAuth(app, renderProfile, payload);
+      await requireAuth(app, renderProfile, payload);
       return;
     case "create-post":
-      requireAuth(app, renderCreatePost);
+      await requireAuth(app, renderCreatePost);
       return;
     case "edit-post":
-      requireAuth(app, renderEditPost, payload);
+      await requireAuth(app, renderEditPost, payload);
       return;
     case "search":
-      requireAuth(app, renderSearch, payload);
+      await requireAuth(app, renderSearch, payload);
       return;
     case "messages":
-      requireAuth(app, renderMessages, payload);
+      await requireAuth(app, renderMessages, payload);
       return;
     default:
+      stopLiveSync();
       renderLogin(app);
   }
 }
 
-export function initRouter() {
-  const currentUser = getAuthenticatedUser();
+export async function initRouter() {
+  const currentUser = getAuthenticatedUser() || (await resolveAuthenticatedUser());
 
   if (currentUser) {
-    navigate("feed");
+    await navigate("feed");
     return;
   }
 
-  navigate("login");
+  await navigate("login");
 }
 
 export function handleLogout() {
   logoutUser();
-  navigate("login");
+  void navigate("login");
 }

@@ -1,29 +1,37 @@
 import { clearElement, createElement } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
 import { createAvatarElement } from "../utils/avatar.js";
-import { navigate } from "../router.js";
+import { navigate, registerViewCleanup } from "../router.js";
 import { showToast } from "../components/toast.js";
 import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
 import { showActionSheet } from "../components/actionSheet.js";
 import { showConfirmDialog } from "../components/confirmDialog.js";
 import {
-  blockUser,
+  blockUserRemote,
   findUserById,
   getDirectMessageAvailability,
   getUsers,
   isUserBlocked,
-  setDirectMessagesEnabled,
-  unblockUser
+  loadUserDirectory,
+  setDirectMessagesEnabledRemote,
+  unblockUserRemote
 } from "../services/userService.js";
 import {
   MAX_VOICE_NOTE_DURATION_MS,
   configureVoiceNoteAudio,
   formatVoiceNoteDuration,
   formatVoiceNotePlaybackRate,
+  getVoiceNotePendingSyncMessage,
+  getVoiceNoteSource,
   getNextVoiceNotePlaybackRate,
   getVoiceNoteFeatureStatus,
+  isVoiceNotePendingSync,
   startVoiceNoteRecording
 } from "../utils/voiceNotes.js";
+import {
+  getVoiceNoteDailyLimitMessage,
+  isVoiceNoteDailyLimitError
+} from "../utils/voiceNoteLimit.js";
 import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
 import {
   attachVoiceNoteScrubber,
@@ -38,9 +46,11 @@ import {
   getConversationsForUser,
   getOrCreateConversation,
   getUnreadMessageCountForConversation,
+  loadConversations,
   markConversationRead,
   MESSAGE_EDIT_WINDOW_MS,
   sendMessage,
+  subscribeToConversationChanges,
   updateMessage
 } from "../services/messageService.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
@@ -57,16 +67,28 @@ const messagesUiState = {
   visibleMessageCounts: new Map()
 };
 
-export function renderMessages(app, currentUser, payload = null) {
+export async function renderMessages(app, currentUser, payload = null) {
   clearElement(app);
 
-  const activeConversation = resolveActiveConversation(currentUser.id, payload);
+  try {
+    await Promise.all([
+      loadConversations({
+        currentUserId: currentUser.id,
+        force: true
+      }),
+      loadUserDirectory()
+    ]);
+  } catch (error) {
+    showToast(error.message || "Could not load messages right now.", "error");
+  }
+
+  const activeConversation = await resolveActiveConversation(currentUser.id, payload);
   const activeConversationId = activeConversation?.id || null;
   const editingMessageId =
     typeof payload?.editingMessageId === "string" ? payload.editingMessageId : "";
 
   if (activeConversationId) {
-    markConversationRead({
+    await markConversationRead({
       conversationId: activeConversationId,
       userId: currentUser.id
     });
@@ -87,32 +109,47 @@ export function renderMessages(app, currentUser, payload = null) {
     className: `messages-layout${activeConversationRecord ? " messages-layout-thread-open" : ""}`
   });
 
-  layout.append(
-    createConversationListCard({
-      currentUser,
-      conversations,
-      activeConversationId
-    }),
-    createConversationPanel({
-      currentUser,
-      conversation: activeConversationRecord,
-      editingMessageId
-    })
-  );
+  const conversationListCard = createConversationListCard({
+    currentUser,
+    conversations,
+    activeConversationId
+  });
+  const conversationPanel = createConversationPanel({
+    currentUser,
+    conversation: activeConversationRecord,
+    editingMessageId
+  });
+
+  layout.append(conversationListCard.element, conversationPanel.element);
 
   main.appendChild(layout);
   shell.append(navbar, main);
   app.appendChild(shell);
+
+  registerViewCleanup(
+    subscribeToConversationChanges(() => {
+      const nextConversations = getConversationsForUser(currentUser.id);
+      const nextActiveConversation = activeConversationId
+        ? getConversationById(activeConversationId)
+        : null;
+
+      conversationListCard.refresh({
+        conversations: nextConversations,
+        activeConversationId
+      });
+      conversationPanel.refresh(nextActiveConversation);
+    })
+  );
 }
 
-function resolveActiveConversation(currentUserId, payload) {
+async function resolveActiveConversation(currentUserId, payload) {
   const conversationId =
     typeof payload?.conversationId === "string" ? payload.conversationId : "";
   const targetUserId = typeof payload?.userId === "string" ? payload.userId : "";
 
   if (targetUserId && targetUserId !== currentUserId) {
     try {
-      return getOrCreateConversation({
+      return await getOrCreateConversation({
         currentUserId,
         targetUserId
       });
@@ -190,6 +227,8 @@ function createConversationListCard({ currentUser, conversations, activeConversa
   let selectionMode = false;
   let searchQuery = "";
   let visibleConversationCount = CHAT_BATCH_SIZE;
+  let conversationsState = Array.isArray(conversations) ? conversations : [];
+  let activeConversationIdState = activeConversationId;
   const selectedConversationIds = new Set();
 
   dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
@@ -199,10 +238,10 @@ function createConversationListCard({ currentUser, conversations, activeConversa
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     if (!normalizedQuery) {
-      return conversations;
+      return conversationsState;
     }
 
-    return conversations.filter((conversation) => {
+    return conversationsState.filter((conversation) => {
       const otherUser = getConversationPartner(conversation, currentUser.id);
       const lastMessage = conversation.messages[conversation.messages.length - 1] || null;
       const preview = getConversationPreviewText({
@@ -230,7 +269,7 @@ function createConversationListCard({ currentUser, conversations, activeConversa
       selectedConversationIds.size > 0
         ? `Delete selected (${selectedConversationIds.size})`
         : "Delete selected";
-    deleteAllBtn.disabled = conversations.length === 0;
+    deleteAllBtn.disabled = conversationsState.length === 0;
   };
 
   const archiveSelected = (conversationIds) => {
@@ -244,29 +283,33 @@ function createConversationListCard({ currentUser, conversations, activeConversa
       message: "They will be removed from your inbox on this device.",
       confirmText: "Delete",
       danger: true,
-      onConfirm: () => {
-        archiveSelectedConversationsForUser({
-          conversationIds,
-          userId: currentUser.id
-        });
-        conversationIds.forEach((conversationId) => {
-          clearConversationNotifications({
-            userId: currentUser.id,
-            conversationId
+      onConfirm: async () => {
+        try {
+          await archiveSelectedConversationsForUser({
+            conversationIds,
+            userId: currentUser.id
           });
-        });
+          conversationIds.forEach((conversationId) => {
+            clearConversationNotifications({
+              userId: currentUser.id,
+              conversationId
+            });
+          });
 
-        const nextPayload =
-          activeConversationId && !conversationIds.includes(activeConversationId)
-            ? { conversationId: activeConversationId }
-            : null;
-        navigate("messages", nextPayload);
+          const nextPayload =
+            activeConversationIdState && !conversationIds.includes(activeConversationIdState)
+              ? { conversationId: activeConversationIdState }
+              : null;
+          void navigate("messages", nextPayload);
+        } catch (error) {
+          showToast(error.message || "Could not delete the selected chats.", "error");
+        }
       }
     });
   };
 
   const archiveAll = () => {
-    if (conversations.length === 0) {
+    if (conversationsState.length === 0) {
       showToast("There are no chats to delete.", "error");
       return;
     }
@@ -276,15 +319,19 @@ function createConversationListCard({ currentUser, conversations, activeConversa
       message: "This clears your inbox archive on this device.",
       confirmText: "Delete all",
       danger: true,
-      onConfirm: () => {
-        archiveAllConversationsForUser(currentUser.id);
-        conversations.forEach((conversation) => {
-          clearConversationNotifications({
-            userId: currentUser.id,
-            conversationId: conversation.id
+      onConfirm: async () => {
+        try {
+          await archiveAllConversationsForUser(currentUser.id);
+          conversationsState.forEach((conversation) => {
+            clearConversationNotifications({
+              userId: currentUser.id,
+              conversationId: conversation.id
+            });
           });
-        });
-        navigate("messages");
+          void navigate("messages");
+        } catch (error) {
+          showToast(error.message || "Could not delete all chats.", "error");
+        }
       }
     });
   };
@@ -324,7 +371,7 @@ function createConversationListCard({ currentUser, conversations, activeConversa
       const lastMessage = conversation.messages[conversation.messages.length - 1] || null;
       const item = createElement("button", {
         className: `messages-thread-item${
-          activeConversationId === conversation.id ? " messages-thread-item-active" : ""
+          activeConversationIdState === conversation.id ? " messages-thread-item-active" : ""
         }${unreadCount > 0 ? " messages-thread-item-unread" : ""}`,
         type: "button",
         attributes: {
@@ -411,7 +458,7 @@ function createConversationListCard({ currentUser, conversations, activeConversa
           return;
         }
 
-        navigate("messages", { conversationId: conversation.id });
+        void navigate("messages", { conversationId: conversation.id });
       });
       list.appendChild(item);
     });
@@ -439,19 +486,21 @@ function createConversationListCard({ currentUser, conversations, activeConversa
   card.append(header, list);
 
   dmToggleInput.addEventListener("change", () => {
-    try {
-      setDirectMessagesEnabled({
-        userId: currentUser.id,
-        enabled: dmToggleInput.checked
-      });
-      navigate(
-        "messages",
-        activeConversationId ? { conversationId: activeConversationId } : null
-      );
-    } catch (error) {
-      dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
-      showToast(error.message || "Could not update direct messages.", "error");
-    }
+    (async () => {
+      try {
+        const updatedUser = await setDirectMessagesEnabledRemote({
+          enabled: dmToggleInput.checked
+        });
+        currentUser.directMessagesEnabled = updatedUser.directMessagesEnabled;
+        void navigate(
+          "messages",
+          activeConversationId ? { conversationId: activeConversationId } : null
+        );
+      } catch (error) {
+        dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
+        showToast(error.message || "Could not update direct messages.", "error");
+      }
+    })();
   });
 
   searchInput.addEventListener("input", () => {
@@ -477,7 +526,26 @@ function createConversationListCard({ currentUser, conversations, activeConversa
   deleteAllBtn.addEventListener("click", archiveAll);
 
   renderList();
-  return card;
+
+  return {
+    element: card,
+    refresh({
+      conversations: nextConversations = conversationsState,
+      activeConversationId: nextActiveConversationId = activeConversationIdState
+    } = {}) {
+      conversationsState = Array.isArray(nextConversations) ? nextConversations : [];
+      activeConversationIdState = nextActiveConversationId;
+
+      const validConversationIds = new Set(conversationsState.map((conversation) => conversation.id));
+      Array.from(selectedConversationIds).forEach((conversationId) => {
+        if (!validConversationIds.has(conversationId)) {
+          selectedConversationIds.delete(conversationId);
+        }
+      });
+
+      renderList();
+    }
+  };
 }
 
 function createConversationPanel({ currentUser, conversation, editingMessageId }) {
@@ -487,9 +555,13 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
 
   if (!conversation) {
     card.appendChild(createDiscoverPeoplePanel(currentUser));
-    return card;
+    return {
+      element: card,
+      refresh() {}
+    };
   }
 
+  let conversationState = conversation;
   const otherUser = getConversationPartner(conversation, currentUser.id);
   const availability = getDirectMessageAvailability({
     senderUserId: currentUser.id,
@@ -545,7 +617,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   });
   const spotlightNote = createElement("p", {
     className: "messages-panel-note",
-    text: availability.allowed ? "Messages stay local to this device for now." : availability.message
+    text: availability.allowed ? "Direct messages are synced to your account." : availability.message
   });
   const body = createElement("div", { className: "messages-panel-body" });
   const messages = createElement("div", {
@@ -616,7 +688,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   header.append(topbar, spotlightNote);
 
   backBtn.addEventListener("click", () => {
-    navigate("messages");
+    void navigate("messages");
   });
 
   userBtn.addEventListener("click", () => {
@@ -648,21 +720,19 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
               message: confirmMessage,
               confirmText: currentUserBlockedOther ? "Unblock" : "Block",
               danger: currentUserBlockedOther === false,
-              onConfirm: () => {
+              onConfirm: async () => {
                 try {
                   if (currentUserBlockedOther) {
-                    unblockUser({
-                      currentUserId: currentUser.id,
+                    await unblockUserRemote({
                       targetUserId: otherUser.id
                     });
                   } else {
-                    blockUser({
-                      currentUserId: currentUser.id,
+                    await blockUserRemote({
                       targetUserId: otherUser.id
                     });
                   }
 
-                  navigate("messages", { conversationId: conversation.id });
+                  void navigate("messages", { conversationId: conversationState.id });
                 } catch (error) {
                   showToast(error.message || "Could not update block state.", "error");
                 }
@@ -679,16 +749,20 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
               message: "It will be removed from your inbox on this device.",
               confirmText: "Delete",
               danger: true,
-              onConfirm: () => {
-                archiveSelectedConversationsForUser({
-                  conversationIds: [conversation.id],
-                  userId: currentUser.id
-                });
-                clearConversationNotifications({
-                  userId: currentUser.id,
-                  conversationId: conversation.id
-                });
-                navigate("messages");
+              onConfirm: async () => {
+                try {
+                  await archiveSelectedConversationsForUser({
+                    conversationIds: [conversationState.id],
+                    userId: currentUser.id
+                  });
+                  clearConversationNotifications({
+                    userId: currentUser.id,
+                    conversationId: conversationState.id
+                  });
+                  void navigate("messages");
+                } catch (error) {
+                  showToast(error.message || "Could not delete that chat.", "error");
+                }
               }
             });
           }
@@ -703,7 +777,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
 
     clearElement(messages);
 
-    if (conversation.messages.length === 0) {
+    if (conversationState.messages.length === 0) {
       messages.appendChild(
         createElement("p", {
           className: "messages-empty-copy",
@@ -714,22 +788,22 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
       );
     } else {
       const lastSeenOwnMessageId = getLastSeenOwnMessageId({
-        conversation,
+        conversation: conversationState,
         currentUserId: currentUser.id,
         otherUserId: otherUser?.id || ""
       });
       const visibleMessageCount =
-        messagesUiState.visibleMessageCounts.get(conversation.id) || THREAD_MESSAGE_BATCH_SIZE;
-      const visibleMessages = conversation.messages.slice(-visibleMessageCount);
+        messagesUiState.visibleMessageCounts.get(conversationState.id) || THREAD_MESSAGE_BATCH_SIZE;
+      const visibleMessages = conversationState.messages.slice(-visibleMessageCount);
 
-      if (conversation.messages.length > visibleMessages.length) {
+      if (conversationState.messages.length > visibleMessages.length) {
         messages.appendChild(
           createLoadMoreControl({
             label: "Load older messages",
             className: "messages-load-more-row",
             onClick: () => {
               messagesUiState.visibleMessageCounts.set(
-                conversation.id,
+                conversationState.id,
                 visibleMessageCount + THREAD_MESSAGE_BATCH_SIZE
               );
               renderMessagesList({ preserveScrollPosition: true });
@@ -743,7 +817,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
           createMessageBubble({
             currentUser,
             otherUser,
-            conversationId: conversation.id,
+            conversationId: conversationState.id,
             message,
             seenUser: message.id === lastSeenOwnMessageId ? otherUser : null,
             isEditing: editingMessageId === message.id
@@ -806,7 +880,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   composer.append(composerControls);
 
   input.addEventListener("input", syncComposerControls);
-  composer.addEventListener("submit", (event) => {
+  composer.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     try {
@@ -820,9 +894,8 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         throw new Error("Send text or a voice note, not both.");
       }
 
-      const updatedConversation = sendMessage({
-        conversationId: conversation.id,
-        senderId: currentUser.id,
+      const updatedConversation = await sendMessage({
+        conversationId: conversationState.id,
         text: input.value,
         voiceNote: voiceNoteDraft
       });
@@ -831,9 +904,13 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         voiceComposer.clear();
       }
 
-      navigate("messages", { conversationId: updatedConversation.id });
+      void navigate("messages", { conversationId: updatedConversation.id });
     } catch (error) {
-      showToast(error.message || "Could not send your message.", "error");
+      const message = isVoiceNoteDailyLimitError(error)
+        ? getVoiceNoteDailyLimitMessage(error)
+        : error.message || "Could not send your message.";
+
+      showToast(message, "error");
     }
   });
 
@@ -847,7 +924,43 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
     }
   });
 
-  return card;
+  return {
+    element: card,
+    refresh(nextConversation) {
+      if (!nextConversation || editingMessageId) {
+        return;
+      }
+
+      const wasNearBottom =
+        messages.scrollHeight - (messages.scrollTop + messages.clientHeight) < 64;
+      const previousMessageCount = conversationState.messages.length;
+      const nextMessageCount = Array.isArray(nextConversation.messages)
+        ? nextConversation.messages.length
+        : previousMessageCount;
+
+      conversationState = nextConversation;
+      renderMessagesList({
+        preserveScrollPosition: !wasNearBottom,
+        stickToBottom: wasNearBottom || nextMessageCount > previousMessageCount
+      });
+
+      const hasUnreadIncoming = conversationState.messages.some(
+        (message) =>
+          message.senderId !== currentUser.id && !message.readBy.includes(currentUser.id)
+      );
+
+      if (hasUnreadIncoming) {
+        void markConversationRead({
+          conversationId: conversationState.id,
+          userId: currentUser.id
+        });
+        void clearConversationNotifications({
+          userId: currentUser.id,
+          conversationId: conversationState.id
+        });
+      }
+    }
+  };
 }
 
 function createMessageBubble({
@@ -859,7 +972,8 @@ function createMessageBubble({
   isEditing = false
 }) {
   const isOwnMessage = message.senderId === currentUser.id;
-  const isVoiceMessage = Boolean(message.voiceNote?.dataUrl);
+  const isVoiceMessage =
+    Boolean(getVoiceNoteSource(message.voiceNote)) || isVoiceNotePendingSync(message.voiceNote);
   const stack = createElement("div", {
     className: `messages-bubble-stack${isOwnMessage ? " messages-bubble-stack-own" : ""}`
   });
@@ -885,11 +999,15 @@ function createMessageBubble({
     menuBtn.addEventListener("click", () => {
       const actions = [];
 
-      if (canEditMessage({ message, userId: currentUser.id }) && !message.voiceNote?.dataUrl) {
+      if (
+        canEditMessage({ message, userId: currentUser.id }) &&
+        !getVoiceNoteSource(message.voiceNote) &&
+        !isVoiceNotePendingSync(message.voiceNote)
+      ) {
         actions.push({
           label: "Edit",
           onSelect: () => {
-            navigate("messages", {
+            void navigate("messages", {
               conversationId,
               editingMessageId: message.id
             });
@@ -906,14 +1024,13 @@ function createMessageBubble({
             message: "Everyone in this chat will see that you deleted it.",
             confirmText: "Delete",
             danger: true,
-            onConfirm: () => {
+            onConfirm: async () => {
               try {
-                deleteMessageForEveryone({
+                await deleteMessageForEveryone({
                   conversationId,
-                  messageId: message.id,
-                  userId: currentUser.id
+                  messageId: message.id
                 });
-                navigate("messages", { conversationId });
+                void navigate("messages", { conversationId });
               } catch (error) {
                 showToast(error.message || "Could not delete that message.", "error");
               }
@@ -935,7 +1052,8 @@ function createMessageBubble({
     isEditing &&
     isOwnMessage &&
     canEditMessage({ message, userId: currentUser.id }) &&
-    !message.voiceNote?.dataUrl
+    !getVoiceNoteSource(message.voiceNote) &&
+    !isVoiceNotePendingSync(message.voiceNote)
   ) {
     bubble.appendChild(
       createMessageEditForm({
@@ -975,7 +1093,7 @@ function createMessageBubble({
             : `${otherUser?.username || "Someone"} deleted a message.`
       })
     );
-  } else if (message.voiceNote?.dataUrl) {
+  } else if (getVoiceNoteSource(message.voiceNote)) {
     if (isOwnMessage) {
       bubble.appendChild(createOwnMenuButton());
     }
@@ -984,6 +1102,18 @@ function createMessageBubble({
       createMessageVoiceNotePlayer({
         voiceNote: message.voiceNote,
         speakerUser: isOwnMessage ? currentUser : otherUser,
+        isOwnMessage,
+        metaText: formatMessageTimestamp(message.createdAt)
+      })
+    );
+  } else if (isVoiceNotePendingSync(message.voiceNote)) {
+    if (isOwnMessage) {
+      bubble.appendChild(createOwnMenuButton());
+    }
+
+    bubble.appendChild(
+      createMessageVoiceNotePendingState({
+        voiceNote: message.voiceNote,
         isOwnMessage,
         metaText: formatMessageTimestamp(message.createdAt)
       })
@@ -1057,20 +1187,19 @@ function createMessageEditForm({ conversationId, message }) {
   form.append(input, actions, timeLimit);
 
   cancelBtn.addEventListener("click", () => {
-    navigate("messages", { conversationId });
+    void navigate("messages", { conversationId });
   });
 
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     try {
-      updateMessage({
+      await updateMessage({
         conversationId,
         messageId: message.id,
-        userId: message.senderId,
         text: input.value
       });
-      navigate("messages", { conversationId });
+      void navigate("messages", { conversationId });
     } catch (error) {
       showToast(error.message || "Could not update that message.", "error");
     }
@@ -1639,7 +1768,7 @@ function createMessageVoiceNotePlayer({
 
   const audio = document.createElement("audio");
   audio.className = "messages-voice-audio";
-  configureVoiceNoteAudio(audio, voiceNote.dataUrl);
+  configureVoiceNoteAudio(audio, getVoiceNoteSource(voiceNote));
   block.appendChild(audio);
 
   const visualizer = createVoiceNoteVisualizer({
@@ -1770,6 +1899,42 @@ function createMessageVoiceNotePlayer({
 
   applyPlaybackRate();
   syncPlayer();
+  return block;
+}
+
+function createMessageVoiceNotePendingState({
+  voiceNote,
+  isOwnMessage = false,
+  metaText = ""
+}) {
+  const block = createElement("div", {
+    className: `messages-voice-pending${isOwnMessage ? " messages-voice-pending-own" : ""}`
+  });
+  const status = createElement("p", {
+    className: "messages-voice-pending-text",
+    text: getVoiceNotePendingSyncMessage()
+  });
+  const metaParts = [];
+
+  if (voiceNote?.durationMs) {
+    metaParts.push(formatVoiceNoteDuration(voiceNote.durationMs));
+  }
+
+  if (metaText) {
+    metaParts.push(metaText);
+  }
+
+  block.appendChild(status);
+
+  if (metaParts.length > 0) {
+    block.appendChild(
+      createElement("p", {
+        className: "messages-voice-pending-meta",
+        text: metaParts.join(" | ")
+      })
+    );
+  }
+
   return block;
 }
 
@@ -1930,7 +2095,7 @@ function createDiscoverPeoplePanel(currentUser) {
       });
 
       actionBtn.addEventListener("click", () => {
-        navigate("messages", { userId: user.id });
+        void navigate("messages", { userId: user.id });
       });
 
       results.appendChild(card);
@@ -1983,10 +2148,16 @@ function getConversationPreviewText({ currentUser, message, otherUser }) {
     return `${actorLabel} deleted a message.`;
   }
 
-  if (message.voiceNote?.dataUrl) {
+  if (getVoiceNoteSource(message.voiceNote)) {
     return message.senderId === currentUser.id
       ? "You sent a voice note."
       : `${otherUser?.username || "Someone"} sent you a voice note.`;
+  }
+
+  if (isVoiceNotePendingSync(message.voiceNote)) {
+    return message.senderId === currentUser.id
+      ? "Your voice note is reloading after refresh."
+      : `${otherUser?.username || "Someone"} sent a voice note that is reloading.`;
   }
 
   return message.senderId === currentUser.id
@@ -2018,16 +2189,17 @@ function getLastSeenOwnMessageId({ conversation, currentUserId, otherUserId }) {
 
 function formatBubbleMeta(message) {
   const time = formatMessageTimestamp(message.createdAt);
+  const encryptionLabel = message.isEndToEndEncrypted ? " | Encrypted" : "";
 
   if (message.deletedForEveryone) {
-    return `${time} | Deleted`;
+    return `${time} | Deleted${encryptionLabel}`;
   }
 
   if (message.editedAt) {
-    return `${time} | Edited`;
+    return `${time} | Edited${encryptionLabel}`;
   }
 
-  return time;
+  return `${time}${encryptionLabel}`;
 }
 
 function formatMessageTimestamp(isoDate) {

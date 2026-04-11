@@ -2,8 +2,11 @@ import { createElement } from "../utils/dom.js";
 import {
   formatVoiceNoteDuration,
   configureVoiceNoteAudio,
+  getVoiceNoteSource,
+  getVoiceNotePendingSyncMessage,
   getNextVoiceNotePlaybackRate,
-  formatVoiceNotePlaybackRate
+  formatVoiceNotePlaybackRate,
+  isVoiceNotePendingSync
 } from "../utils/voiceNotes.js";
 import { setVoiceNoteControlIcon } from "../utils/voiceNoteIcons.js";
 import {
@@ -176,8 +179,10 @@ export function createCommentCard(comment, author, options = {}) {
     body.appendChild(actions);
   }
 
-  if (comment.voiceNote?.dataUrl) {
+  if (getVoiceNoteSource(comment.voiceNote)) {
     body.appendChild(createVoiceNotePlayer(comment.voiceNote));
+  } else if (isVoiceNotePendingSync(comment.voiceNote)) {
+    body.appendChild(createVoiceNotePendingNotice());
   }
 
   main.prepend(authorAvatar, body);
@@ -287,7 +292,7 @@ export function createVoiceNotePlayer(voiceNote) {
 
   const audio = document.createElement("audio");
   audio.className = "comment-voice-audio";
-  configureVoiceNoteAudio(audio, voiceNote.dataUrl);
+  configureVoiceNoteAudio(audio, getVoiceNoteSource(voiceNote));
 
   const visualizer = createVoiceNoteVisualizer({
     waveformElement: waveform,
@@ -424,6 +429,15 @@ export function createVoiceNotePlayer(voiceNote) {
   block.append(shell, audio);
 
   return block;
+}
+
+export function createVoiceNotePendingNotice({ className = "" } = {}) {
+  const normalizedClassName = className ? ` ${className}` : "";
+
+  return createElement("p", {
+    className: `voice-note-pending-note${normalizedClassName}`,
+    text: getVoiceNotePendingSyncMessage()
+  });
 }
 
 function formatCommentMeta(comment) {

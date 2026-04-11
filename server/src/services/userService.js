@@ -1,6 +1,9 @@
 import bcrypt from "bcryptjs";
+import { Notification } from "../models/Notification.js";
 import { User } from "../models/User.js";
 import { AppError } from "../utils/appError.js";
+import { normalizeDirectMessageEncryptionRecord } from "../utils/directMessageEncryption.js";
+import { publishToUser } from "./realtimeService.js";
 import {
   normalizeAvatarUrl,
   validateBoolean,
@@ -18,6 +21,10 @@ function hasId(list, targetId) {
 
 function removeId(list, targetId) {
   return list.filter((value) => String(value) !== String(targetId));
+}
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function requireUser(userId, options = {}) {
@@ -40,6 +47,10 @@ async function requireUser(userId, options = {}) {
 }
 
 export function serializeUser(user) {
+  const directMessageEncryption = normalizeDirectMessageEncryptionRecord(
+    user.directMessageEncryption
+  );
+
   return {
     id: String(user._id),
     username: user.username,
@@ -51,6 +62,12 @@ export function serializeUser(user) {
     },
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
+    directMessageEncryption: directMessageEncryption
+      ? {
+          ...directMessageEncryption,
+          updatedAt: user.directMessageEncryption?.updatedAt || null
+        }
+      : null,
     blockedUserIds: Array.isArray(user.blockedUserIds)
       ? user.blockedUserIds.map((value) => String(value))
       : [],
@@ -65,8 +82,92 @@ export function serializeUser(user) {
   };
 }
 
+async function listUsersByIdOrder(userIds, { limit } = {}) {
+  const safeUserIds = Array.isArray(userIds) ? userIds.map((value) => String(value)) : [];
+  const limitedUserIds =
+    Number.isInteger(limit) && limit > 0 ? safeUserIds.slice(0, limit) : safeUserIds;
+
+  if (limitedUserIds.length === 0) {
+    return [];
+  }
+
+  const users = await User.find({
+    _id: { $in: limitedUserIds }
+  });
+  const usersById = new Map(users.map((user) => [String(user._id), user]));
+
+  return limitedUserIds
+    .map((userId) => usersById.get(userId) || null)
+    .filter(Boolean)
+    .map((user) => serializeUser(user));
+}
+
+export async function getUserProfile(currentUserId, targetUserId) {
+  const [currentUser, targetUser, followerCount] = await Promise.all([
+    requireUser(currentUserId),
+    requireUser(targetUserId),
+    User.countDocuments({
+      followingUserIds: targetUserId
+    })
+  ]);
+
+  return {
+    user: serializeUser(targetUser),
+    stats: {
+      followerCount,
+      followingCount: Array.isArray(targetUser.followingUserIds)
+        ? targetUser.followingUserIds.length
+        : 0,
+      isCurrentUser: String(currentUser._id) === String(targetUser._id),
+      isFollowing: hasId(currentUser.followingUserIds, targetUser._id)
+    }
+  };
+}
+
+export async function searchUsers(query, { limit } = {}) {
+  const normalizedQuery = String(query ?? "").trim();
+  const searchFilter = normalizedQuery
+    ? {
+        $or: [
+          { username: { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
+          { "location.township": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
+          { "location.extension": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } }
+        ]
+      }
+    : {};
+  const searchQuery = User.find(searchFilter).sort({ usernameLower: 1 });
+
+  if (Number.isInteger(limit) && limit > 0) {
+    searchQuery.limit(limit);
+  }
+
+  const users = await searchQuery;
+  return users.map((user) => serializeUser(user));
+}
+
+export async function getFollowerUsers(userId, { limit } = {}) {
+  await requireUser(userId);
+
+  const query = User.find({
+    followingUserIds: userId
+  }).sort({ usernameLower: 1 });
+
+  if (Number.isInteger(limit) && limit > 0) {
+    query.limit(limit);
+  }
+
+  const users = await query;
+  return users.map((user) => serializeUser(user));
+}
+
+export async function getFollowingUsers(userId, { limit } = {}) {
+  const user = await requireUser(userId);
+  return listUsersByIdOrder(user.followingUserIds, { limit });
+}
+
 export async function updateUserProfile(userId, payload = {}) {
   const user = await requireUser(userId, { includePasswordHash: true });
+  const previousPhoneNumber = user.phoneNumber;
 
   const safeUsername =
     payload.username === undefined ? user.username : validateUsername(payload.username);
@@ -141,6 +242,8 @@ export async function updateUserProfile(userId, payload = {}) {
   user.usernameLower = safeUsername.toLowerCase();
   user.phoneNumber = safePhoneNumber;
   user.avatarUrl = safeAvatarUrl;
+  user.phoneVerified =
+    previousPhoneNumber === safePhoneNumber ? user.phoneVerified === true : false;
   user.location = {
     township: safeTownship,
     extension: safeExtension
@@ -168,6 +271,27 @@ export async function setUserPreference(userId, key, enabled) {
   return serializeUser(user);
 }
 
+export async function updateDirectMessageEncryptionKey(userId, payload = {}) {
+  const user = await requireUser(userId);
+  const encryptionRecord = normalizeDirectMessageEncryptionRecord(payload);
+
+  if (!encryptionRecord) {
+    throw new AppError("Direct-message encryption key is invalid.", {
+      statusCode: 400,
+      code: "DIRECT_MESSAGE_ENCRYPTION_INVALID",
+      field: "directMessageEncryption"
+    });
+  }
+
+  user.directMessageEncryption = {
+    ...encryptionRecord,
+    updatedAt: new Date()
+  };
+  await user.save();
+
+  return serializeUser(user);
+}
+
 export async function followUser(currentUserId, targetUserId) {
   if (String(currentUserId) === String(targetUserId)) {
     throw new AppError("You cannot follow yourself.", {
@@ -181,9 +305,26 @@ export async function followUser(currentUserId, targetUserId) {
     requireUser(targetUserId)
   ]);
 
-  if (!hasId(currentUser.followingUserIds, targetUser._id)) {
+  const didFollow = !hasId(currentUser.followingUserIds, targetUser._id);
+
+  if (didFollow) {
     currentUser.followingUserIds.push(targetUser._id);
     await currentUser.save();
+
+    if (targetUser.notificationsEnabled !== false) {
+      await Notification.create({
+        userId: targetUser._id,
+        actorUserId: currentUser._id,
+        type: "follow",
+        title: "New follower",
+        text: ""
+      });
+
+      publishToUser(String(targetUser._id), {
+        type: "notifications.updated",
+        notificationType: "follow"
+      });
+    }
   }
 
   return {

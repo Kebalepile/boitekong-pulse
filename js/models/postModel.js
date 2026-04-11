@@ -4,6 +4,7 @@ import {
   validatePostContent,
   validateImageUrl
 } from "../utils/validators.js";
+import { normalizeVoiceNote } from "../utils/voiceNotes.js";
 
 export function createPost({ userId, content = "", image = "", location, voiceNote = null }) {
   if (!userId || typeof userId !== "string") {
@@ -19,7 +20,7 @@ export function createPost({ userId, content = "", image = "", location, voiceNo
       township: validateTownship(location.township),
       extension: validateExtension(location.extension)
     },
-    voiceNote: voiceNote?.dataUrl ? voiceNote : null,
+    voiceNote: normalizeVoiceNote(voiceNote),
     reactions: {
       like: [],
       dislike: []

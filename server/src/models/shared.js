@@ -22,6 +22,10 @@ export const locationSchema = new Schema(
 
 export const voiceNoteSchema = new Schema(
   {
+    audioData: {
+      type: Buffer,
+      default: undefined
+    },
     url: {
       type: String,
       default: ""
@@ -39,7 +43,17 @@ export const voiceNoteSchema = new Schema(
       min: 0,
       default: 0
     },
+    durationMs: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
     sizeBytes: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    size: {
       type: Number,
       min: 0,
       default: 0

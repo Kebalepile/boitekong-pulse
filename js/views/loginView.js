@@ -81,7 +81,7 @@ export function renderLogin(app) {
   });
 
   forgotBtn.addEventListener("click", () => {
-    showToast("Password reset can be added once backend is connected.", "success");
+    showToast("Password reset is not available yet.", "success");
   });
 
   form.addEventListener("submit", async (event) => {
