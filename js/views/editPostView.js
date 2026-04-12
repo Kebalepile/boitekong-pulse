@@ -6,15 +6,28 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
+import { createPostImageField } from "../components/postImageField.js";
 import { getPostById, loadPostById, updatePost } from "../services/postService.js";
 import { showToast } from "../components/toast.js";
-import { navigate } from "../router.js";
+import { navigate, registerViewCleanup } from "../router.js";
 import { getVoiceNoteSource, isVoiceNotePendingSync } from "../utils/voiceNotes.js";
+import { showLoadingOverlay } from "../components/loadingOverlay.js";
 
 const MAX_POST_LENGTH = 1000;
 
 export async function renderEditPost(app, currentUser, payload) {
   clearElement(app);
+  let viewActive = true;
+  const shell = createElement("section", { className: "feed-shell" });
+  const navbar = createNavbar(currentUser, "create-post");
+  const main = createElement("main", { className: "profile-main editor-main" });
+
+  main.appendChild(createEditPostLoadingSkeleton());
+  shell.append(navbar, main);
+  app.appendChild(shell);
+  registerViewCleanup(() => {
+    viewActive = false;
+  });
 
   const postId = payload?.postId;
   if (postId) {
@@ -24,30 +37,30 @@ export async function renderEditPost(app, currentUser, payload) {
       // Let the cached lookup and existing UI handling resolve the empty state.
     }
   }
+
+  if (!viewActive) {
+    return;
+  }
+
   const post = postId ? getPostById(postId) : null;
 
   if (!post) {
     showToast("Post not found.", "error");
-    navigate("feed");
+    void navigate("feed");
     return;
   }
 
   if (post.userId !== currentUser.id) {
     showToast("You can only edit your own post.", "error");
-    navigate("feed");
+    void navigate("feed");
     return;
   }
 
   if (getVoiceNoteSource(post.voiceNote) || isVoiceNotePendingSync(post.voiceNote)) {
     showToast("Voice-note posts can't be edited. Delete and repost instead.", "error");
-    navigate("feed");
+    void navigate("feed");
     return;
   }
-
-  const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser, "create-post");
-
-  const main = createElement("main", { className: "profile-main editor-main" });
 
   const infoCard = createElement("section", {
     className: "profile-card editor-card editor-brief-card"
@@ -62,7 +75,7 @@ export async function renderEditPost(app, currentUser, payload) {
   });
   const infoText = createElement("p", {
     className: "section-copy",
-    text: "Edit the wording only. Your original post metadata stays attached to the post."
+    text: "Update the wording or replace the photo. Your original post metadata stays attached to the post."
   });
 
   infoCard.append(infoEyebrow, infoTitle, infoText);
@@ -90,6 +103,13 @@ export async function renderEditPost(app, currentUser, payload) {
     placeholder: "Update your post",
     value: post.content
   });
+  const imageField = createPostImageField({
+    form,
+    inputId: "edit-post-image",
+    labelText: "Photo",
+    titleText: "Update post image",
+    initialImage: post.image || post.imageUrl || ""
+  });
 
   const actions = createElement("div", { className: "form-actions" });
 
@@ -108,34 +128,138 @@ export async function renderEditPost(app, currentUser, payload) {
   cancelBtn.addEventListener("click", () => navigate("feed"));
 
   actions.append(cancelBtn, submitBtn);
-  form.append(contentField, actions);
+  form.append(contentField, imageField.wrapper, actions);
 
   formCard.append(formTitle, formText, form);
-  main.append(infoCard, formCard);
-  shell.append(navbar, main);
-  app.appendChild(shell);
+  main.replaceChildren(infoCard, formCard);
 
   attachCharacterCounter("edit-post-content", "edit-post-content-counter");
 
+  let isSubmitting = false;
+  let activeLoadingOverlay = null;
+  let trackedDisabledStates = new Map();
+
+  const setEditBusyState = (nextBusy) => {
+    isSubmitting = Boolean(nextBusy);
+
+    if (isSubmitting) {
+      trackedDisabledStates = new Map();
+      Array.from(form.querySelectorAll("button, input, textarea, select")).forEach((control) => {
+        trackedDisabledStates.set(control, control.disabled);
+        control.disabled = true;
+      });
+      form.classList.add("edit-post-form-busy");
+      form.setAttribute("aria-busy", "true");
+      submitBtn.textContent = "Saving...";
+      return;
+    }
+
+    trackedDisabledStates.forEach((wasDisabled, control) => {
+      if (control) {
+        control.disabled = wasDisabled;
+      }
+    });
+    trackedDisabledStates = new Map();
+    form.classList.remove("edit-post-form-busy");
+    form.removeAttribute("aria-busy");
+    submitBtn.textContent = "Save Changes";
+  };
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (isSubmitting) {
+      return;
+    }
+
     clearFormErrors(form);
 
     const content = document.getElementById("edit-post-content").value;
 
     try {
+      if (imageField.isProcessing()) {
+        const pendingImageError = new Error("Please wait for the image to finish optimizing.");
+        pendingImageError.field = "image";
+        throw pendingImageError;
+      }
+
+      setEditBusyState(true);
+      activeLoadingOverlay = showLoadingOverlay({
+        label: "Saving changes..."
+      });
       await updatePost({
         postId: post.id,
         content,
-        image: post.image || ""
+        image: imageField.getValue()
       });
 
-      showToast("Post updated successfully.", "success");
-      navigate("feed");
+      showToast("Your post changes are live.", "success", {
+        variant: "updated-success",
+        durationMs: 1800
+      });
+      await navigate("feed");
     } catch (error) {
       handleEditPostError(error);
+    } finally {
+      activeLoadingOverlay?.close();
+      activeLoadingOverlay = null;
+      setEditBusyState(false);
     }
   });
+}
+
+function createEditPostLoadingSkeleton() {
+  const fragment = document.createDocumentFragment();
+  const infoCard = createElement("section", {
+    className: "profile-card editor-card editor-loading-card"
+  });
+  const infoEyebrow = createElement("span", {
+    className: "feed-skeleton-block editor-loading-eyebrow"
+  });
+  const infoTitle = createElement("span", {
+    className: "feed-skeleton-block editor-loading-title"
+  });
+  const infoCopyOne = createElement("span", {
+    className: "feed-skeleton-block editor-loading-line"
+  });
+  const infoCopyTwo = createElement("span", {
+    className: "feed-skeleton-block editor-loading-line editor-loading-line-short"
+  });
+
+  infoCard.append(infoEyebrow, infoTitle, infoCopyOne, infoCopyTwo);
+  fragment.appendChild(infoCard);
+
+  const formCard = createElement("section", {
+    className: "profile-card editor-card editor-form-card editor-loading-card"
+  });
+  const formTitle = createElement("span", {
+    className: "feed-skeleton-block editor-loading-title"
+  });
+  const formCopy = createElement("span", {
+    className: "feed-skeleton-block editor-loading-line"
+  });
+  const textarea = createElement("span", {
+    className: "feed-skeleton-rect editor-loading-textarea"
+  });
+  const image = createElement("span", {
+    className: "feed-skeleton-rect editor-loading-image"
+  });
+  const actions = createElement("div", {
+    className: "form-actions editor-loading-actions"
+  });
+
+  actions.append(
+    createElement("span", {
+      className: "feed-skeleton-chip editor-loading-action"
+    }),
+    createElement("span", {
+      className: "feed-skeleton-chip editor-loading-action"
+    })
+  );
+  formCard.append(formTitle, formCopy, textarea, image, actions);
+  fragment.appendChild(formCard);
+
+  return fragment;
 }
 
 function createTextAreaField({ labelText, inputId, placeholder, value }) {
@@ -199,6 +323,11 @@ function handleEditPostError(error) {
 
   if (error?.field === "content" || message.toLowerCase().includes("post content")) {
     setFieldError("edit-post-content", message);
+    return;
+  }
+
+  if (error?.field === "image" || error?.field === "imageUrl") {
+    setFieldError("edit-post-image", message);
     return;
   }
 

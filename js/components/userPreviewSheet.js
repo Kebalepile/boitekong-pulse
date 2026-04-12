@@ -54,13 +54,118 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
     }
   };
 
-  const renderSheet = async (targetUserId, listType = "following") => {
-    sheet.replaceChildren(
-      createElement("p", {
-        className: "user-preview-empty",
-        text: "Loading profile..."
+  const createPreviewLoadingState = () => {
+    const fragment = document.createDocumentFragment();
+    const chrome = createElement("div", { className: "user-preview-chrome" });
+    const handle = createElement("span", {
+      className: "user-preview-handle",
+      attributes: {
+        "aria-hidden": "true"
+      }
+    });
+    const closeBtn = createElement("button", {
+      className: "user-preview-close-btn",
+      type: "button",
+      attributes: {
+        "aria-label": "Close profile preview",
+        title: "Close"
+      }
+    });
+    const hero = createElement("div", {
+      className: "user-preview-hero user-preview-loading-hero"
+    });
+    const avatarShell = createElement("div", {
+      className: "user-preview-avatar-shell user-preview-loading-avatar-shell"
+    });
+    const avatar = createElement("span", {
+      className: "feed-skeleton-circle user-preview-loading-avatar"
+    });
+    const identity = createElement("div", {
+      className: "user-preview-identity user-preview-loading-identity"
+    });
+    const username = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-title"
+    });
+    const handleText = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-handle-text"
+    });
+    const joined = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-meta"
+    });
+    const location = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-meta user-preview-loading-meta-wide"
+    });
+    const stats = createElement("div", {
+      className: "user-preview-stats user-preview-loading-stats"
+    });
+    const actions = createElement("div", {
+      className: "user-preview-actions user-preview-loading-actions"
+    });
+    const followingSection = createElement("div", {
+      className: "user-preview-following-section user-preview-loading-following"
+    });
+    const followingHeader = createElement("div", {
+      className: "user-preview-following-header"
+    });
+    const followingTitle = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-following-title"
+    });
+    const followingHint = createElement("span", {
+      className: "feed-skeleton-block user-preview-loading-following-hint"
+    });
+    const followingScroller = createElement("div", {
+      className: "user-preview-following-scroller"
+    });
+
+    closeBtn.appendChild(createCloseIcon());
+    closeBtn.addEventListener("click", closeSheet);
+
+    avatarShell.appendChild(avatar);
+    identity.append(username, handleText, joined, location);
+    hero.append(avatarShell, identity);
+
+    for (let index = 0; index < 2; index += 1) {
+      stats.appendChild(
+        createElement("span", {
+          className: "feed-skeleton-rect user-preview-loading-stat"
+        })
+      );
+    }
+
+    actions.append(
+      createElement("span", {
+        className: "feed-skeleton-chip user-preview-loading-action user-preview-loading-action-wide"
+      }),
+      createElement("span", {
+        className: "feed-skeleton-chip user-preview-loading-action"
       })
     );
+
+    followingHeader.append(followingTitle, followingHint);
+
+    for (let index = 0; index < 4; index += 1) {
+      const card = createElement("div", {
+        className: "user-preview-following-card user-preview-loading-card"
+      });
+      const personAvatar = createElement("span", {
+        className: "feed-skeleton-circle user-preview-loading-following-avatar"
+      });
+      const personName = createElement("span", {
+        className: "feed-skeleton-block user-preview-loading-following-name"
+      });
+
+      card.append(personAvatar, personName);
+      followingScroller.appendChild(card);
+    }
+
+    chrome.append(handle, closeBtn);
+    followingSection.append(followingHeader, followingScroller);
+    fragment.append(chrome, hero, stats, actions, followingSection);
+    return fragment;
+  };
+
+  const renderSheet = async (targetUserId, listType = "following") => {
+    sheet.replaceChildren(createPreviewLoadingState());
 
     let profile;
     let followerUsers;

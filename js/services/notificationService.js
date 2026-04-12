@@ -172,11 +172,18 @@ function getBrowserNotificationCopy(notification) {
   };
 }
 
+function getAggregateBrowserNotificationCopy(count) {
+  return {
+    title: "Boitekong Pulse",
+    body: `You have ${count} new notifications. Open the app to view them.`
+  };
+}
+
 function isBrowserNotificationSupported() {
   return typeof window !== "undefined" && typeof Notification !== "undefined";
 }
 
-function showBrowserNotification(notification) {
+function showBrowserNotification(notification, options = {}) {
   if (!isBrowserNotificationSupported() || Notification.permission !== "granted") {
     return null;
   }
@@ -187,13 +194,14 @@ function showBrowserNotification(notification) {
     return null;
   }
 
-  const { title, body } = getBrowserNotificationCopy(notification);
+  const { title, body } = options.copy || getBrowserNotificationCopy(notification);
   const browserNotification = new Notification(title, {
     body,
     tag:
-      notification.type === "dm" && notification.conversationId
+      options.tag ||
+      (notification.type === "dm" && notification.conversationId
         ? `dm-${notification.conversationId}`
-        : notification.id
+        : notification.id)
   });
 
   browserNotification.onclick = () => {
@@ -206,7 +214,7 @@ function showBrowserNotification(notification) {
     }
 
     if (typeof notificationOpenHandler === "function") {
-      notificationOpenHandler(notification);
+      notificationOpenHandler(options.payload || notification);
     }
   };
 
@@ -228,13 +236,31 @@ function maybeShowNewBrowserNotifications({
       .map((notification) => notification.id)
   );
 
-  nextNotifications.forEach((notification) => {
-    if (
+  const nextUnreadNotifications = nextNotifications.filter(
+    (notification) =>
       notification.userId === currentUserId &&
       notification.read !== true &&
       !previousUnreadIds.has(notification.id)
-    ) {
-      showBrowserNotification(notification);
+  );
+
+  if (nextUnreadNotifications.length <= 0) {
+    return;
+  }
+
+  if (nextUnreadNotifications.length === 1) {
+    showBrowserNotification(nextUnreadNotifications[0]);
+    return;
+  }
+
+  showBrowserNotification(nextUnreadNotifications[0], {
+    copy: getAggregateBrowserNotificationCopy(nextUnreadNotifications.length),
+    tag: `notification-batch-${currentUserId}`,
+    payload: {
+      id: `notification-batch-${currentUserId}`,
+      userId: currentUserId,
+      type: "notification_batch",
+      aggregate: true,
+      notificationIds: nextUnreadNotifications.map((notification) => notification.id)
     }
   });
 }
@@ -413,6 +439,49 @@ export async function markAllNotificationsRead(userId = getCurrentUserId()) {
     });
   } catch {
     // Keep the optimistic read state locally even if the request fails.
+  }
+
+  return nextNotifications;
+}
+
+export async function deleteNotification(notificationId) {
+  const safeNotificationId =
+    typeof notificationId === "string" ? notificationId.trim() : "";
+
+  if (!safeNotificationId) {
+    return getNotifications();
+  }
+
+  const nextNotifications = updateNotificationsInStore((notifications) =>
+    notifications.filter((notification) => notification.id !== safeNotificationId)
+  );
+
+  try {
+    await apiRequest(`/notifications/${encodeURIComponent(safeNotificationId)}`, {
+      method: "DELETE"
+    });
+  } catch {
+    // Keep the optimistic deleted state locally even if the request fails.
+  }
+
+  return nextNotifications;
+}
+
+export async function deleteAllNotifications(userId = getCurrentUserId()) {
+  if (!userId) {
+    return getNotifications();
+  }
+
+  const nextNotifications = updateNotificationsInStore((notifications) =>
+    notifications.filter((notification) => notification.userId !== userId)
+  );
+
+  try {
+    await apiRequest("/notifications", {
+      method: "DELETE"
+    });
+  } catch {
+    // Keep the optimistic deleted state locally even if the request fails.
   }
 
   return nextNotifications;

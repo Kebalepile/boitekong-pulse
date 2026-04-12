@@ -150,9 +150,18 @@ function sanitizeCommentRecordForStorage(comment = {}) {
   };
 }
 
+function sanitizePostImageForStorage(image = "") {
+  const normalizedImage = typeof image === "string" ? image.trim() : "";
+  return /^https?:\/\//i.test(normalizedImage) ? normalizedImage : "";
+}
+
 function sanitizePostRecordForStorage(post = {}) {
+  const sanitizedImage = sanitizePostImageForStorage(post.imageUrl || post.image || "");
+
   return {
     ...post,
+    image: sanitizedImage,
+    imageUrl: sanitizedImage,
     voiceNote: sanitizeVoiceNoteForStorage(post.voiceNote),
     comments: Array.isArray(post.comments)
       ? post.comments.map((comment) => sanitizeCommentRecordForStorage(comment))

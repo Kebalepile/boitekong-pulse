@@ -8,6 +8,11 @@
   gap: 14px;
 }
 
+.messages-layout-loading {
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  align-items: stretch;
+}
+
 .messages-card {
   display: grid;
   gap: 14px;
@@ -21,6 +26,117 @@
 .messages-panel-card {
   border: 1px solid #e6ecf2;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.messages-loading-card {
+  overflow: hidden;
+}
+
+.messages-loading-header {
+  gap: 14px;
+}
+
+.messages-loading-title {
+  width: 96px;
+  height: 18px;
+}
+
+.messages-loading-chip {
+  width: 84px;
+  height: 34px;
+}
+
+.messages-loading-search {
+  height: 44px;
+  border-radius: 999px;
+}
+
+.messages-loading-list {
+  gap: 10px;
+}
+
+.messages-loading-thread-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  background: #ffffff;
+  border: 1px solid #edf2f7;
+}
+
+.messages-loading-thread-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.messages-loading-thread-title {
+  width: min(100%, 136px);
+  height: 14px;
+}
+
+.messages-loading-thread-preview {
+  width: min(100%, 196px);
+  height: 12px;
+}
+
+.messages-loading-panel-header {
+  min-height: 62px;
+}
+
+.messages-loading-panel-hero {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.messages-loading-panel-title {
+  width: min(100%, 152px);
+  height: 16px;
+}
+
+.messages-loading-panel-meta {
+  width: min(100%, 116px);
+  height: 12px;
+  margin-top: 6px;
+}
+
+.messages-loading-bubbles {
+  gap: 12px;
+}
+
+.messages-loading-bubble {
+  height: 64px;
+  border-radius: 18px;
+}
+
+.messages-loading-bubble-self {
+  width: 72%;
+  margin-left: auto;
+}
+
+.messages-loading-bubbles .messages-loading-bubble:not(.messages-loading-bubble-self) {
+  width: 68%;
+}
+
+.messages-loading-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.messages-loading-composer-input {
+  height: 48px;
+  border-radius: 999px;
+}
+
+.messages-loading-composer-btn {
+  width: 84px;
+  height: 40px;
 }
 
 .messages-list-header {
@@ -1028,6 +1144,10 @@
 }
 
 @media (max-width: 879px) {
+  .messages-layout-loading {
+    grid-template-columns: 1fr;
+  }
+
   .messages-layout-thread-open .messages-list-card {
     display: none;
   }

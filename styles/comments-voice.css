@@ -1341,11 +1341,18 @@ body.comments-sheet-open {
     align-items: start;
   }
 
+  .editor-main.create-post-main {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .image-upload-actions,
   .avatar-upload-actions {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
   }
 
+  .image-upload-remove-btn,
   .avatar-remove-btn {
     width: auto;
   }

@@ -254,6 +254,7 @@ select:focus {
 
 .feed-stat-pill,
 .user-preview-stat,
+.image-upload-panel,
 .avatar-upload-panel {
   background: rgba(248, 250, 252, 0.96);
   border-color: var(--border-soft);
@@ -362,6 +363,7 @@ select:focus {
 }
 
 .toast {
-  background: rgba(15, 23, 42, 0.92);
-  border-color: rgba(148, 163, 184, 0.26);
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(219, 227, 238, 0.96);
+  color: #0f172a;
 }

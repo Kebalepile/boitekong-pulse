@@ -86,6 +86,12 @@ WHAT IS ALREADY BUILT
 - Register and login use the API.
 - Login accepts username or phone number.
 - Register requires phone number.
+- Forgot password now exists from the login page:
+  - user enters the registered phone number
+  - SMS reset OTP is sent only if that number exists in the database
+  - reset OTP expires after 5 minutes
+  - forgot-password reset can only be completed once every 24 hours
+  - successful reset returns the user to the login page
 - Profile update uses the API.
 - Phone verification flow exists in code:
   - send OTP
@@ -155,6 +161,7 @@ WHAT WAS CLEANED UP TODAY
 - Removed the old unused frontend `js/models/userModel.js`.
 - Added `.env.example` for repeatable setup.
 - Added a production safety check so the API refuses to boot in `production` with the placeholder JWT secret.
+- Added forgot-password reset by SMS OTP.
 - Updated docs so they no longer describe the app as "backend scaffold only."
 
 TOMORROW'S MAIN TASKS
@@ -165,23 +172,25 @@ TOMORROW'S MAIN TASKS
 RECOMMENDED QA ORDER
 1. Register
 2. Login
-3. Edit profile
-4. Send OTP
-5. Verify OTP
-6. Create text post
-7. Create voice-note post
-8. Edit/delete eligible post
-9. Add comment/reply
-10. React to post/comment
-11. Search users/posts
-12. Follow/unfollow
-13. Block/unblock
-14. DM text
-15. DM voice note
-16. Edit/delete message
-17. Notification open/read flows
-18. Report post/comment with and without hide-for-me
-19. Multi-tab or multi-device live sync sanity check
+3. Forgot password request by registered phone number
+4. Forgot password OTP confirm within 5 minutes
+5. Edit profile
+6. Send OTP
+7. Verify OTP
+8. Create text post
+9. Create voice-note post
+10. Edit/delete eligible post
+11. Add comment/reply
+12. React to post/comment
+13. Search users/posts
+14. Follow/unfollow
+15. Block/unblock
+16. DM text
+17. DM voice note
+18. Edit/delete message
+19. Notification open/read flows
+20. Report post/comment with and without hide-for-me
+21. Multi-tab or multi-device live sync sanity check
 
 WHAT IS STILL LEFT BEFORE A REAL BETA GO-LIVE
 - Real end-to-end QA needs to pass.

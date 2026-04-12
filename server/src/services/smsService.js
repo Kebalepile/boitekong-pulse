@@ -2,6 +2,31 @@ import { env } from "../config/env.js";
 import { AppError } from "../utils/appError.js";
 import { validateRequiredPhoneNumber } from "../utils/validators.js";
 
+function formatClickatellPhoneNumber(value) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+
+  if (digits.length === 10 && digits.startsWith("0")) {
+    return `27${digits.slice(1)}`;
+  }
+
+  if (digits.length === 11 && digits.startsWith("27")) {
+    return digits;
+  }
+
+  if (digits.length === 12 && digits.startsWith("270")) {
+    return `27${digits.slice(3)}`;
+  }
+
+  throw new AppError(
+    'SMS "to" number must use South African format like 0831234567 or 27831234567.',
+    {
+      statusCode: 400,
+      code: "SMS_PHONE_NUMBER_INVALID",
+      field: "to"
+    }
+  );
+}
+
 function validateMessageContent(content) {
   const safeContent = typeof content === "string" ? content.trim() : "";
 
@@ -38,9 +63,10 @@ export async function sendSms({ to, content }) {
   }
 
   const safePhoneNumber = validateRequiredPhoneNumber(to);
+  const providerPhoneNumber = formatClickatellPhoneNumber(safePhoneNumber);
   const safeContent = validateMessageContent(content);
   const url = buildSmsUrl({
-    to: safePhoneNumber,
+    to: providerPhoneNumber,
     content: safeContent
   });
 
@@ -69,7 +95,7 @@ export async function sendSms({ to, content }) {
 
   return {
     provider: "clickatell",
-    to: safePhoneNumber,
+    to: providerPhoneNumber,
     content: safeContent,
     response: payload
   };

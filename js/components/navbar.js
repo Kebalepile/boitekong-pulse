@@ -11,6 +11,8 @@ import {
 import { formatCompactCount } from "../utils/numberFormat.js";
 import {
   clearConversationNotifications,
+  deleteAllNotifications,
+  deleteNotification,
   ensureBrowserNotificationPermission,
   getBrowserNotificationPermissionStatus,
   getNotificationsForUser,
@@ -137,7 +139,33 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
     }
   });
   createBtn.append(createTopbarCreateContent());
-  createBtn.addEventListener("click", () => navigate("create-post"));
+
+  let createNavigationPending = false;
+  let profileNavigationPending = false;
+
+  const setCreateNavigationBusyState = (nextBusy) => {
+    createNavigationPending = Boolean(nextBusy);
+    createBtn.disabled = createNavigationPending;
+    createBtn.classList.toggle("topbar-create-btn-busy", createNavigationPending);
+    createBtn.setAttribute("aria-busy", createNavigationPending ? "true" : "false");
+  };
+
+  const handleCreatePostNavigation = async () => {
+    if (createNavigationPending || activeRoute === "create-post") {
+      return;
+    }
+
+    try {
+      setCreateNavigationBusyState(true);
+      await navigate("create-post");
+    } finally {
+      setCreateNavigationBusyState(false);
+    }
+  };
+
+  createBtn.addEventListener("click", () => {
+    void handleCreatePostNavigation();
+  });
 
   const notificationsBtn = createElement("button", {
     className: "secondary-btn topbar-utility-btn",
@@ -201,6 +229,26 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
       decorative: true
     })
   );
+
+  const setProfileNavigationBusyState = (nextBusy) => {
+    profileNavigationPending = Boolean(nextBusy);
+    profileBtn.disabled = profileNavigationPending;
+    profileBtn.classList.toggle("topbar-profile-btn-busy", profileNavigationPending);
+    profileBtn.setAttribute("aria-busy", profileNavigationPending ? "true" : "false");
+  };
+
+  const handleProfileNavigation = async (payload = null) => {
+    if (profileNavigationPending || activeRoute === "profile") {
+      return;
+    }
+
+    try {
+      setProfileNavigationBusyState(true);
+      await navigate("profile", payload);
+    } finally {
+      setProfileNavigationBusyState(false);
+    }
+  };
 
   const searchRow = createElement("div", { className: "topbar-search-row" });
   const searchBackBtn = createElement("button", {
@@ -357,6 +405,9 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
     currentUser,
     getMessagesMenuLabel,
     onNavigate: (route, payload = null) => navigate(route, payload),
+    onCreatePost: () => {
+      void handleCreatePostNavigation();
+    },
     onLogout: handleLogout
   });
   const notificationsMenuController = createNotificationsMenu({
@@ -367,7 +418,14 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   const accountMenuController = createAccountMenu({
     currentUser,
     getMessagesMenuLabel,
-    onNavigate: (route, payload = null) => navigate(route, payload),
+    onNavigate: (route, payload = null) => {
+      if (route === "profile") {
+        void handleProfileNavigation(payload);
+        return;
+      }
+
+      navigate(route, payload);
+    },
     onLogout: handleLogout
   });
 
@@ -387,6 +445,11 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   );
 
   registerNotificationOpenHandler((notification) => {
+    if (notification?.aggregate === true) {
+      navigate("feed");
+      return;
+    }
+
     void handleNotificationSelection({
       notification,
       currentUserId: currentUser.id,
@@ -458,7 +521,13 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   return header;
 }
 
-function createTopbarDrawer({ currentUser, getMessagesMenuLabel, onNavigate, onLogout }) {
+function createTopbarDrawer({
+  currentUser,
+  getMessagesMenuLabel,
+  onNavigate,
+  onCreatePost,
+  onLogout
+}) {
   let root = null;
   let closeTimerId = null;
   let messagesItem = null;
@@ -495,7 +564,7 @@ function createTopbarDrawer({ currentUser, getMessagesMenuLabel, onNavigate, onL
       createDrawerItem({
         iconName: "create-post",
         label: "Create post",
-        onSelect: () => onNavigate("create-post")
+        onSelect: onCreatePost
       })
     );
 
@@ -690,6 +759,9 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       className: "topbar-notifications-title",
       text: "Notifications"
     });
+    const actions = createElement("div", {
+      className: "topbar-notifications-actions"
+    });
     const notificationsToggle = createNotificationsToggle({
       checked: currentUser.notificationsEnabled !== false,
       onChange: async (enabled) => {
@@ -711,9 +783,14 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       }
     });
     const markAllBtn = createElement("button", {
-      className: "topbar-notifications-mark-all",
+      className: "topbar-notifications-action",
       type: "button",
       text: "Mark all as read"
+    });
+    const clearAllBtn = createElement("button", {
+      className: "topbar-notifications-action",
+      type: "button",
+      text: "Clear all"
     });
     permissionHelper = createElement("p", {
       className: "topbar-notifications-helper"
@@ -724,6 +801,7 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
 
       const notifications = getNotificationsForUser(currentUser.id);
       markAllBtn.disabled = notifications.every((notification) => notification.read === true);
+      clearAllBtn.disabled = notifications.length === 0;
 
       if (notifications.length === 0) {
         list.appendChild(
@@ -741,9 +819,8 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
         const actor = notification.actorUserId
           ? findUserById(notification.actorUserId)
           : null;
-        const item = createElement("button", {
+        const item = createElement("article", {
           className: `topbar-notification-item${notification.read ? "" : " topbar-notification-item-unread"}`,
-          type: "button",
           attributes: {
             "aria-label": notification.title || "Notification"
           }
@@ -758,6 +835,13 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
               className: "topbar-notification-avatar topbar-notification-avatar-fallback",
               text: "!"
             });
+        const itemButton = createElement("button", {
+          className: "topbar-notification-content",
+          type: "button",
+          attributes: {
+            "aria-label": notification.title || "Notification"
+          }
+        });
         const copy = createElement("div", { className: "topbar-notification-copy" });
         const itemTitle = createElement("strong", {
           className: "topbar-notification-item-title",
@@ -781,8 +865,8 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
         }
 
         copy.appendChild(itemTime);
-        item.append(avatar, copy);
-        item.addEventListener("click", () => {
+        itemButton.append(copy);
+        itemButton.addEventListener("click", () => {
           void handleNotificationSelection({
             notification,
             currentUserId: currentUser.id,
@@ -791,6 +875,24 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
             close
           });
         });
+        const deleteButton = createElement("button", {
+          className: "topbar-notification-delete",
+          type: "button",
+          text: "X",
+          attributes: {
+            "aria-label": "Delete notification",
+            title: "Delete notification"
+          }
+        });
+        deleteButton.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          await deleteNotification(notification.id);
+          if (typeof onNotificationsChange === "function") {
+            onNotificationsChange();
+          }
+        });
+
+        item.append(avatar, itemButton, deleteButton);
 
         list.appendChild(item);
       });
@@ -820,8 +922,19 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       }
     });
 
-    header.append(title, notificationsToggle, markAllBtn);
+    clearAllBtn.addEventListener("click", async () => {
+      await deleteAllNotifications(currentUser.id);
+      visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
+      renderList();
+      if (typeof onNotificationsChange === "function") {
+        onNotificationsChange();
+      }
+    });
+
+    actions.append(markAllBtn, clearAllBtn);
+    header.append(title, notificationsToggle);
     panel.appendChild(header);
+    panel.appendChild(actions);
     panel.appendChild(permissionHelper);
     updatePermissionHelper();
     renderList();

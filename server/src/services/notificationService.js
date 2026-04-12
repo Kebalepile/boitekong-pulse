@@ -209,3 +209,41 @@ export async function markAllNotificationsRead(currentUserId) {
     updatedCount: Number(result.modifiedCount || 0)
   };
 }
+
+export async function deleteNotification({ currentUserId, notificationId }) {
+  const notification = await requireNotificationForUser(notificationId, currentUserId);
+  const deletedNotificationId = toIdString(notification._id);
+
+  await Notification.deleteOne({
+    _id: notification._id,
+    userId: currentUserId
+  });
+
+  publishToUser(toIdString(currentUserId), {
+    type: "notifications.updated",
+    notificationId: deletedNotificationId
+  });
+
+  return {
+    notificationId: deletedNotificationId,
+    deleted: true
+  };
+}
+
+export async function deleteAllNotifications(currentUserId) {
+  assertObjectId(currentUserId, "userId");
+
+  const result = await Notification.deleteMany({
+    userId: currentUserId
+  });
+
+  if (Number(result.deletedCount || 0) > 0) {
+    publishToUser(toIdString(currentUserId), {
+      type: "notifications.updated"
+    });
+  }
+
+  return {
+    deletedCount: Number(result.deletedCount || 0)
+  };
+}

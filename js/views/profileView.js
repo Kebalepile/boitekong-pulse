@@ -14,7 +14,11 @@ import {
   updateAuthenticatedUserProfile,
   verifyAuthenticatedUserPhoneOtp
 } from "../services/authService.js";
-import { createAvatarElement, readFileAsDataUrl } from "../utils/avatar.js";
+import { createAvatarElement } from "../utils/avatar.js";
+import {
+  compressImageFile,
+  formatImageOptimizationSummary
+} from "../utils/imageCompression.js";
 import { validateAvatarFile, MAX_AVATAR_FILE_BYTES } from "../utils/validators.js";
 import { formatCompactCount } from "../utils/numberFormat.js";
 import {
@@ -29,14 +33,61 @@ import {
   fetchFollowingUsers
 } from "../services/userService.js";
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
+import { showLoadingOverlay } from "../components/loadingOverlay.js";
+
+const PROFILE_LOAD_PLACEHOLDER_TIMEOUT_MS = 3000;
+
+function waitFor(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
 
 export async function renderProfile(app, currentUser, payload = null) {
   clearElement(app);
-  const profileLoadResults = await Promise.allSettled([
+  const shell = createElement("section", { className: "feed-shell" });
+  const navbar = createNavbar(currentUser, "profile");
+  const main = createElement("main", { className: "profile-main profile-page-main" });
+  const activeSection = payload?.section === "followers" || payload?.section === "following"
+    ? payload.section
+    : "home";
+  const showEditForm = activeSection === "home" && payload?.editMode === true;
+
+  if (activeSection === "followers" || activeSection === "following") {
+    main.classList.add("profile-page-main-people");
+  }
+
+  shell.append(navbar, main);
+  app.appendChild(shell);
+  main.appendChild(
+    createProfileLoadingSkeleton({
+      activeSection,
+      showEditForm
+    })
+  );
+
+  const profileLoadPromise = Promise.allSettled([
     fetchFollowerUsers(currentUser.id),
     fetchFollowingUsers(currentUser.id),
     loadPostsByUserId(currentUser.id)
   ]);
+  const racedProfileLoad = await Promise.race([
+    profileLoadPromise.then((results) => ({
+      timedOut: false,
+      results
+    })),
+    waitFor(PROFILE_LOAD_PLACEHOLDER_TIMEOUT_MS).then(() => ({
+      timedOut: true,
+      results: null
+    }))
+  ]);
+  const profileLoadResults = racedProfileLoad.timedOut
+    ? [
+        { status: "fulfilled", value: getFollowerUsers(currentUser.id) },
+        { status: "fulfilled", value: getFollowingUsers(currentUser.id) },
+        { status: "fulfilled", value: getPostsByUserId(currentUser.id) }
+      ]
+    : racedProfileLoad.results;
   const followerUsers =
     profileLoadResults[0]?.status === "fulfilled"
       ? profileLoadResults[0].value
@@ -46,27 +97,22 @@ export async function renderProfile(app, currentUser, payload = null) {
       ? profileLoadResults[1].value
       : getFollowingUsers(currentUser.id);
 
-  if (profileLoadResults.some((result) => result.status === "rejected")) {
+  if (
+    !racedProfileLoad.timedOut &&
+    profileLoadResults.some((result) => result.status === "rejected")
+  ) {
     showToast(
       "Could not fully refresh your profile. Showing cached details where available.",
       "error"
     );
   }
 
-  const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser, "profile");
-  const main = createElement("main", { className: "profile-main profile-page-main" });
-  const activeSection = payload?.section === "followers" || payload?.section === "following"
-    ? payload.section
-    : "home";
-  const showEditForm = activeSection === "home" && payload?.editMode === true;
-  if (activeSection === "followers" || activeSection === "following") {
-    main.classList.add("profile-page-main-people");
-  }
   const followerCount = followerUsers.length;
   const followingCount = followingUsers.length;
   const avatarState = {
-    dataUrl: currentUser.avatarDataUrl || ""
+    dataUrl: currentUser.avatarDataUrl || "",
+    pending: false,
+    requestToken: 0
   };
 
   const summaryCard = createElement("section", {
@@ -154,6 +200,7 @@ export async function renderProfile(app, currentUser, payload = null) {
   heroCopy.append(summaryTitle, handleText, metaRow, summaryText, actionRow);
   channelHero.append(avatarPreviewShell, heroCopy);
   summaryCard.append(channelBanner, channelHero, tabs);
+  main.replaceChildren();
   let profileEditor = null;
 
   if (activeSection === "followers" || activeSection === "following") {
@@ -175,8 +222,6 @@ export async function renderProfile(app, currentUser, payload = null) {
   } else {
     main.append(summaryCard);
   }
-  shell.append(navbar, main);
-  app.appendChild(shell);
 
   const syncMetaRow = () => {
     const nextUserPosts = getPostsByUserId(currentUser.id);
@@ -208,6 +253,38 @@ export async function renderProfile(app, currentUser, payload = null) {
     return;
   }
 
+  let profileSavePending = false;
+  let profileSaveOverlay = null;
+  let trackedProfileControlStates = new Map();
+
+  const setProfileSaveBusyState = (nextBusy) => {
+    profileSavePending = Boolean(nextBusy);
+
+    if (profileSavePending) {
+      trackedProfileControlStates = new Map();
+      Array.from(profileEditor.form.querySelectorAll("button, input, textarea, select")).forEach(
+        (control) => {
+          trackedProfileControlStates.set(control, control.disabled);
+          control.disabled = true;
+        }
+      );
+      profileEditor.form.classList.add("profile-form-busy");
+      profileEditor.form.setAttribute("aria-busy", "true");
+      profileEditor.submitBtn.textContent = "Saving...";
+      return;
+    }
+
+    trackedProfileControlStates.forEach((wasDisabled, control) => {
+      if (control) {
+        control.disabled = wasDisabled;
+      }
+    });
+    trackedProfileControlStates = new Map();
+    profileEditor.form.classList.remove("profile-form-busy");
+    profileEditor.form.removeAttribute("aria-busy");
+    profileEditor.submitBtn.textContent = "Save";
+  };
+
   const usernameInput = document.getElementById("profile-username");
   usernameInput?.addEventListener("input", () => {
     renderAvatarPreview(avatarPreview, {
@@ -218,6 +295,11 @@ export async function renderProfile(app, currentUser, payload = null) {
 
   profileEditor.form.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (profileSavePending) {
+      return;
+    }
+
     clearFormErrors(profileEditor.form);
 
     const username = document.getElementById("profile-username").value;
@@ -229,6 +311,18 @@ export async function renderProfile(app, currentUser, payload = null) {
     const confirmNewPassword = document.getElementById("profile-confirm-password").value;
 
     try {
+      if (avatarState.pending) {
+        const pendingAvatarError = new Error(
+          "Please wait for the profile photo to finish optimizing."
+        );
+        pendingAvatarError.field = "avatar";
+        throw pendingAvatarError;
+      }
+
+      setProfileSaveBusyState(true);
+      profileSaveOverlay = showLoadingOverlay({
+        label: "Saving profile..."
+      });
       await updateAuthenticatedUserProfile({
         currentUser,
         username,
@@ -241,14 +335,106 @@ export async function renderProfile(app, currentUser, payload = null) {
         confirmNewPassword
       });
 
-      showToast("Profile updated successfully.", "success");
-      navigate("profile");
+      showToast("Your profile changes are live.", "success", {
+        variant: "updated-success",
+        durationMs: 1800
+      });
+      await navigate("profile");
     } catch (error) {
       handleProfileError(error, {
         switchToTab: profileEditor.switchToTab
       });
+    } finally {
+      profileSaveOverlay?.close();
+      profileSaveOverlay = null;
+      setProfileSaveBusyState(false);
     }
   });
+}
+
+function createProfileLoadingSkeleton({ activeSection = "home", showEditForm = false } = {}) {
+  const fragment = document.createDocumentFragment();
+  const summaryCard = createElement("section", {
+    className: "profile-card profile-channel-hero profile-loading-card"
+  });
+  const banner = createElement("div", {
+    className: "profile-channel-banner profile-loading-banner feed-skeleton-rect"
+  });
+  const hero = createElement("div", {
+    className: "profile-channel-hero-main profile-loading-hero-main"
+  });
+  const avatarShell = createElement("div", {
+    className: "profile-avatar-preview-shell profile-channel-avatar-shell profile-loading-avatar-shell"
+  });
+  const avatar = createElement("span", {
+    className: "feed-skeleton-circle profile-loading-avatar"
+  });
+  const copy = createElement("div", {
+    className: "profile-channel-copy profile-loading-copy"
+  });
+  const title = createElement("span", {
+    className: "feed-skeleton-block profile-loading-title"
+  });
+  const handle = createElement("span", {
+    className: "feed-skeleton-block profile-loading-handle"
+  });
+  const meta = createElement("span", {
+    className: "feed-skeleton-block profile-loading-meta"
+  });
+  const descriptionWide = createElement("span", {
+    className: "feed-skeleton-block profile-loading-description"
+  });
+  const descriptionShort = createElement("span", {
+    className: "feed-skeleton-block profile-loading-description profile-loading-description-short"
+  });
+  const actions = createElement("div", {
+    className: "profile-channel-actions profile-loading-actions"
+  });
+  const tabs = createElement("div", {
+    className: "profile-channel-tabs profile-loading-tabs"
+  });
+
+  for (let index = 0; index < 3; index += 1) {
+    actions.appendChild(
+      createElement("span", {
+        className: "feed-skeleton-chip profile-loading-action-chip"
+      })
+    );
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    tabs.appendChild(
+      createElement("span", {
+        className: "feed-skeleton-chip profile-loading-tab-chip"
+      })
+    );
+  }
+
+  avatarShell.appendChild(avatar);
+  copy.append(title, handle, meta, descriptionWide, descriptionShort, actions);
+  hero.append(avatarShell, copy);
+  summaryCard.append(banner, hero, tabs);
+  fragment.appendChild(summaryCard);
+
+  if (showEditForm || activeSection === "followers" || activeSection === "following") {
+    const detailCard = createElement("section", {
+      className: "profile-card profile-loading-detail-card"
+    });
+    const detailTitle = createElement("span", {
+      className: "feed-skeleton-block profile-loading-detail-title"
+    });
+    const detailLineOne = createElement("span", {
+      className: "feed-skeleton-block profile-loading-detail-line"
+    });
+    const detailLineTwo = createElement("span", {
+      className: "feed-skeleton-block profile-loading-detail-line profile-loading-detail-line-short"
+    });
+
+    detailCard.append(detailTitle, detailLineOne, detailLineTwo);
+    fragment.appendChild(detailCard);
+  }
+
+  return fragment;
 }
 
 function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form }) {
@@ -267,7 +453,13 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
   });
   const helper = createElement("p", {
     className: "field-helper",
-    text: `PNG, JPG, or WEBP. Max ${Math.round(MAX_AVATAR_FILE_BYTES / 1024 / 1024)} MB.`
+    text: `PNG, JPG, or WEBP. We will optimize it to under ${Math.round(
+      MAX_AVATAR_FILE_BYTES / 1024 / 1024
+    )} MB before upload.`
+  });
+  const status = createElement("p", {
+    className: "field-helper image-upload-status",
+    text: currentUser.avatarDataUrl ? "Current photo ready." : "No photo selected."
   });
   const actions = createElement("div", { className: "avatar-upload-actions" });
   const input = createElement("input", {
@@ -284,9 +476,13 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
     type: "button"
   });
   const error = createFieldError("profile-avatar");
+  const syncStatus = (text = "") => {
+    status.textContent = text;
+  };
 
   input.addEventListener("change", async () => {
     clearFormErrors(form);
+    let requestToken = 0;
 
     try {
       const file = input.files?.[0] || null;
@@ -296,20 +492,46 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
       }
 
       validateAvatarFile(file);
-      avatarState.dataUrl = await readFileAsDataUrl(file);
+      requestToken = avatarState.requestToken + 1;
+
+      avatarState.requestToken = requestToken;
+      avatarState.pending = true;
+      syncStatus("Optimizing photo...");
+      const optimizedAvatar = await compressImageFile(file, {
+        maxBytes: MAX_AVATAR_FILE_BYTES,
+        maxWidth: 512,
+        maxHeight: 512
+      });
+
+      if (avatarState.requestToken !== requestToken) {
+        return;
+      }
+
+      avatarState.dataUrl = optimizedAvatar.dataUrl;
+      avatarState.pending = false;
+      syncStatus(formatImageOptimizationSummary(optimizedAvatar, "Profile photo"));
       renderAvatarPreview(avatarPreview, {
         username: document.getElementById("profile-username")?.value || currentUser.username,
         avatarDataUrl: avatarState.dataUrl
       });
     } catch (errorObj) {
+      if (requestToken && avatarState.requestToken !== requestToken) {
+        return;
+      }
+
+      avatarState.pending = false;
       input.value = "";
+      syncStatus(avatarState.dataUrl ? "Current photo ready." : "No photo selected.");
       setFieldError("profile-avatar", errorObj.message || "Could not use that image.");
     }
   });
 
   removeBtn.addEventListener("click", () => {
+    avatarState.requestToken += 1;
+    avatarState.pending = false;
     input.value = "";
     avatarState.dataUrl = "";
+    syncStatus("Photo removed.");
     renderAvatarPreview(avatarPreview, {
       username: document.getElementById("profile-username")?.value || currentUser.username,
       avatarDataUrl: ""
@@ -318,7 +540,7 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
 
   copy.append(title, helper);
   actions.append(input, removeBtn);
-  panel.append(copy, actions);
+  panel.append(copy, actions, status);
   wrapper.append(label, panel, error);
 
   return wrapper;
@@ -970,7 +1192,8 @@ function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
   return {
     formCard,
     form,
-    switchToTab
+    switchToTab,
+    submitBtn
   };
 }
 
@@ -1057,6 +1280,7 @@ function handleProfileError(error, options = {}) {
     township: "profile-township",
     extension: "profile-extension",
     avatar: "profile-avatar",
+    avatarUrl: "profile-avatar",
     currentPassword: "profile-current-password",
     password: "profile-password",
     confirmPassword: "profile-confirm-password"
@@ -1065,6 +1289,7 @@ function handleProfileError(error, options = {}) {
     username: "personal",
     phoneNumber: "personal",
     avatar: "personal",
+    avatarUrl: "personal",
     currentPassword: "credentials",
     password: "credentials",
     confirmPassword: "credentials",

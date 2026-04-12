@@ -65,6 +65,39 @@ export async function registerUser({
   return persistAuthenticatedSession(response);
 }
 
+export async function requestRegistrationOtp({
+  username,
+  phoneNumber = "",
+  township,
+  extension,
+  password,
+  confirmPassword
+}) {
+  return apiRequest("/auth/register/request", {
+    auth: false,
+    method: "POST",
+    body: {
+      username,
+      phoneNumber,
+      township,
+      extension,
+      password,
+      confirmPassword
+    }
+  });
+}
+
+export async function verifyRegistrationOtp({ phoneNumber, code }) {
+  return apiRequest("/auth/register/verify", {
+    auth: false,
+    method: "POST",
+    body: {
+      phoneNumber,
+      code
+    }
+  });
+}
+
 export async function loginUser({ identifier, password }) {
   const response = await apiRequest("/auth/login", {
     auth: false,
@@ -76,6 +109,34 @@ export async function loginUser({ identifier, password }) {
   });
 
   return persistAuthenticatedSession(response);
+}
+
+export async function requestPasswordResetOtp({ phoneNumber }) {
+  return apiRequest("/auth/password-reset/request", {
+    auth: false,
+    method: "POST",
+    body: {
+      phoneNumber
+    }
+  });
+}
+
+export async function resetPasswordWithOtp({
+  phoneNumber,
+  code,
+  newPassword,
+  confirmNewPassword
+}) {
+  return apiRequest("/auth/password-reset/confirm", {
+    auth: false,
+    method: "POST",
+    body: {
+      phoneNumber,
+      code,
+      newPassword,
+      confirmNewPassword
+    }
+  });
 }
 
 export async function updateAuthenticatedUserProfile({

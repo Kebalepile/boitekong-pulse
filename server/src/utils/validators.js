@@ -7,7 +7,9 @@ export const MAX_POST_CONTENT_LENGTH = 1000;
 export const MAX_COMMENT_LENGTH = 300;
 export const MAX_REPORT_NOTE_LENGTH = 120;
 export const MAX_VOICE_NOTE_DURATION_MS = 60000;
+export const MAX_INLINE_IMAGE_BYTES = 1024 * 1024;
 const ALLOWED_REACTION_TYPES = new Set(["like", "dislike"]);
+const ALLOWED_INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 export const REPORT_REASONS = [
   "Spam",
   "Harassment or bullying",
@@ -521,6 +523,13 @@ export function validateImageUrl(value, field = "image") {
     return "";
   }
 
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) {
+    return normalizeInlineImageDataUrl(trimmed, {
+      field,
+      maxBytes: MAX_INLINE_IMAGE_BYTES
+    });
+  }
+
   try {
     const url = new URL(trimmed);
 
@@ -550,7 +559,10 @@ export function normalizeAvatarUrl(value) {
   }
 
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) {
-    return trimmed;
+    return normalizeInlineImageDataUrl(trimmed, {
+      field: "avatarUrl",
+      maxBytes: MAX_INLINE_IMAGE_BYTES
+    });
   }
 
   try {
@@ -576,4 +588,40 @@ export function normalizeAvatarUrl(value) {
       "Avatar URL is invalid."
     );
   }
+}
+
+function normalizeInlineImageDataUrl(
+  value,
+  { field = "image", maxBytes = MAX_INLINE_IMAGE_BYTES } = {}
+) {
+  const trimmed = String(value ?? "").trim();
+  const match = trimmed.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
+
+  if (!match) {
+    throw makeValidationError("IMAGE_DATA_INVALID", field, "Image data is invalid.");
+  }
+
+  const mimeType = match[1].toLowerCase();
+
+  if (!ALLOWED_INLINE_IMAGE_TYPES.has(mimeType)) {
+    throw makeValidationError(
+      "IMAGE_DATA_TYPE_INVALID",
+      field,
+      "Only PNG, JPG, and WEBP images are supported."
+    );
+  }
+
+  const base64Payload = match[2];
+  const paddingLength = (base64Payload.match(/=+$/)?.[0].length || 0);
+  const sizeBytes = Math.floor((base64Payload.length * 3) / 4) - paddingLength;
+
+  if (sizeBytes > maxBytes) {
+    throw makeValidationError(
+      "IMAGE_DATA_TOO_LARGE",
+      field,
+      `Image must be ${Math.round(maxBytes / 1024 / 1024)} MB or smaller after compression.`
+    );
+  }
+
+  return trimmed;
 }

@@ -1,5 +1,7 @@
 import { Router } from "express";
 import {
+  deleteAllNotificationsHandler,
+  deleteNotificationHandler,
   getNotificationsHandler,
   markAllNotificationsReadHandler,
   markConversationNotificationsReadHandler,
@@ -12,11 +14,13 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/", getNotificationsHandler);
+router.delete("/", deleteAllNotificationsHandler);
 router.patch("/read-all", markAllNotificationsReadHandler);
 router.patch(
   "/conversations/:conversationId/read",
   markConversationNotificationsReadHandler
 );
 router.patch("/:notificationId/read", markNotificationReadHandler);
+router.delete("/:notificationId", deleteNotificationHandler);
 
 export default router;

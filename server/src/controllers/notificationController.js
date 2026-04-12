@@ -1,4 +1,6 @@
 import {
+  deleteAllNotifications,
+  deleteNotification,
   getNotificationsForUser,
   markAllNotificationsRead,
   markConversationNotificationsRead,
@@ -50,6 +52,27 @@ export const markAllNotificationsReadHandler = asyncHandler(async (req, res) => 
 
   res.status(200).json({
     message: "All notifications marked as read.",
+    ...result
+  });
+});
+
+export const deleteNotificationHandler = asyncHandler(async (req, res) => {
+  const result = await deleteNotification({
+    currentUserId: req.user._id,
+    notificationId: req.params.notificationId
+  });
+
+  res.status(200).json({
+    message: "Notification deleted.",
+    ...result
+  });
+});
+
+export const deleteAllNotificationsHandler = asyncHandler(async (req, res) => {
+  const result = await deleteAllNotifications(req.user._id);
+
+  res.status(200).json({
+    message: "All notifications deleted.",
     ...result
   });
 });

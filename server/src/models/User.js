@@ -94,6 +94,10 @@ const userSchema = new Schema(
       type: Boolean,
       default: false
     },
+    lastForgotPasswordResetAt: {
+      type: Date,
+      default: null
+    },
     lastSeen: {
       type: Date,
       default: null

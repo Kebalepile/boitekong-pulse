@@ -547,7 +547,7 @@ export async function setPostReaction({
   const safeReactionType = validateReactionType(reactionType);
   const reactionIsActive = updateReactionArray(post.reactions, safeReactionType, currentUserId);
 
-  await post.save();
+  await post.save({ timestamps: false });
   await syncReactionNotification({
     recipientUserId: post.userId,
     actorUserId: currentUserId,
@@ -612,7 +612,7 @@ export async function addCommentToPost({
   });
 
   post.commentCount = Math.max(0, Number(post.commentCount || 0) + 1);
-  await post.save();
+  await post.save({ timestamps: false });
 
   if (parentComment) {
     await createNotificationIfAllowed({
@@ -712,7 +712,7 @@ export async function deleteCommentFromPost({
   ]);
 
   post.commentCount = Math.max(0, Number(post.commentCount || 0) - commentIdsToDelete.length);
-  await post.save();
+  await post.save({ timestamps: false });
 
   publishToAll({
     type: "posts.updated",
@@ -735,7 +735,7 @@ export async function setCommentReaction({
   const safeReactionType = validateReactionType(reactionType);
   const reactionIsActive = updateReactionArray(comment.reactions, safeReactionType, currentUserId);
 
-  await comment.save();
+  await comment.save({ timestamps: false });
   await syncReactionNotification({
     recipientUserId: comment.userId,
     actorUserId: currentUserId,

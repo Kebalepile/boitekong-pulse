@@ -13,26 +13,15 @@ import { FEED_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
 import { showToast } from "../components/toast.js";
 
+const FEED_SKELETON_COUNT = 3;
+
 export async function renderFeed(app, currentUser, payload = null) {
   clearElement(app);
-  const initialLoadTasks = [loadFeedPosts()];
-
-  if (typeof payload?.postId === "string" && payload.postId.trim()) {
-    initialLoadTasks.push(loadPostById(payload.postId));
-  }
-
-  const initialLoadResults = await Promise.allSettled(initialLoadTasks);
-  const failedInitialLoads = initialLoadResults.filter((result) => result.status === "rejected");
-
-  if (failedInitialLoads.length > 0) {
-    showToast(
-      "Could not fully refresh the feed. Showing available cached posts.",
-      "error"
-    );
-  }
 
   let visiblePostsCount = FEED_BATCH_SIZE;
   let lastFilterKey = "";
+  let isFeedLoading = true;
+  let viewActive = true;
   let pendingCommentsTarget =
     typeof payload?.postId === "string"
       ? {
@@ -94,12 +83,26 @@ export async function renderFeed(app, currentUser, payload = null) {
   shell.append(navbar, feedMain);
   app.appendChild(shell);
 
-  const renderPosts = () => {
+  const renderFeedSkeletons = () => {
+    clearElement(statRow);
     clearElement(feedList);
+    feedList.classList.add("feed-list-loading");
+    feedList.setAttribute("aria-busy", "true");
 
+    statRow.append(
+      createFeedStatSkeleton(),
+      createFeedStatSkeleton(),
+      createFeedStatSkeleton(true)
+    );
+
+    for (let index = 0; index < FEED_SKELETON_COUNT; index += 1) {
+      feedList.appendChild(createFeedPostSkeleton());
+    }
+  };
+
+  const renderPosts = () => {
     const townshipQuery = townshipInput.value.trim().toLocaleLowerCase();
     const extensionQuery = extensionInput.value.trim().toLocaleLowerCase();
-
     let posts = getVisiblePosts(currentUser.id);
 
     if (townshipQuery) {
@@ -113,6 +116,15 @@ export async function renderFeed(app, currentUser, payload = null) {
         post.location.extension.toLocaleLowerCase().includes(extensionQuery)
       );
     }
+
+    if (isFeedLoading && posts.length === 0) {
+      renderFeedSkeletons();
+      return;
+    }
+
+    clearElement(feedList);
+    feedList.classList.remove("feed-list-loading");
+    feedList.setAttribute("aria-busy", isFeedLoading ? "true" : "false");
 
     const uniqueAuthors = new Set(posts.map((post) => post.userId)).size;
     clearElement(statRow);
@@ -209,6 +221,9 @@ export async function renderFeed(app, currentUser, payload = null) {
       includePosts: false
     });
   });
+  registerViewCleanup(() => {
+    viewActive = false;
+  });
   registerViewCleanup(
     subscribeToPostChanges(() => {
       renderPosts();
@@ -216,6 +231,34 @@ export async function renderFeed(app, currentUser, payload = null) {
   );
 
   renderPosts();
+
+  const loadInitialFeed = async () => {
+    const initialLoadTasks = [loadFeedPosts()];
+
+    if (typeof payload?.postId === "string" && payload.postId.trim()) {
+      initialLoadTasks.push(loadPostById(payload.postId));
+    }
+
+    const initialLoadResults = await Promise.allSettled(initialLoadTasks);
+
+    if (!viewActive) {
+      return;
+    }
+
+    const failedInitialLoads = initialLoadResults.filter((result) => result.status === "rejected");
+
+    if (failedInitialLoads.length > 0) {
+      showToast(
+        "Could not fully refresh the feed. Showing available cached posts.",
+        "error"
+      );
+    }
+
+    isFeedLoading = false;
+    renderPosts();
+  };
+
+  void loadInitialFeed();
 }
 
 function createStatPill(label, value) {
@@ -233,4 +276,76 @@ function createStatPill(label, value) {
 
   pill.append(pillLabel, pillValue);
   return pill;
+}
+
+function createFeedStatSkeleton(isWide = false) {
+  const pill = createElement("div", {
+    className: `feed-stat-pill feed-stat-pill-skeleton${isWide ? " feed-stat-pill-wide" : ""}`
+  });
+  const label = createElement("span", {
+    className: "feed-skeleton-block feed-skeleton-block-label"
+  });
+  const value = createElement("span", {
+    className: `feed-skeleton-block feed-skeleton-block-value${isWide ? " feed-skeleton-block-value-wide" : ""}`
+  });
+
+  pill.append(label, value);
+  return pill;
+}
+
+function createFeedPostSkeleton() {
+  const card = createElement("article", {
+    className: "post-card post-card-skeleton"
+  });
+  const header = createElement("div", {
+    className: "post-card-header post-card-header-skeleton"
+  });
+  const avatar = createElement("span", {
+    className: "feed-skeleton-circle"
+  });
+  const authorBlock = createElement("div", {
+    className: "post-author-block"
+  });
+  const authorLine = createElement("span", {
+    className: "feed-skeleton-block feed-skeleton-block-author"
+  });
+  const metaLine = createElement("span", {
+    className: "feed-skeleton-block feed-skeleton-block-meta"
+  });
+  const menuDot = createElement("span", {
+    className: "feed-skeleton-circle feed-skeleton-circle-sm"
+  });
+  const contentBlock = createElement("div", {
+    className: "post-content-block"
+  });
+  const lineOne = createElement("span", {
+    className: "feed-skeleton-block feed-skeleton-block-content"
+  });
+  const lineTwo = createElement("span", {
+    className: "feed-skeleton-block feed-skeleton-block-content feed-skeleton-block-content-short"
+  });
+  const image = createElement("div", {
+    className: "feed-skeleton-rect feed-skeleton-rect-image"
+  });
+  const footer = createElement("div", {
+    className: "reaction-bar reaction-bar-skeleton"
+  });
+
+  authorBlock.append(authorLine, metaLine);
+  header.append(avatar, authorBlock, menuDot);
+  contentBlock.append(lineOne, lineTwo);
+  footer.append(
+    createElement("span", {
+      className: "feed-skeleton-chip"
+    }),
+    createElement("span", {
+      className: "feed-skeleton-chip"
+    }),
+    createElement("span", {
+      className: "feed-skeleton-chip feed-skeleton-chip-wide"
+    })
+  );
+
+  card.append(header, contentBlock, image, footer);
+  return card;
 }

@@ -84,6 +84,9 @@ export async function renderSearch(app, currentUser, payload = null) {
   }
 
   if (authorPostsView || initialQuery.trim()) {
+    renderSearchLoadingState(results, {
+      mode: isPostResultsView ? "posts" : initialMode
+    });
     await runSearch();
   } else {
     renderIdleState(results);
@@ -237,6 +240,85 @@ function renderNoResults(results, label) {
 
   card.append(title, text);
   results.appendChild(card);
+}
+
+function renderSearchLoadingState(results, { mode = "posts" } = {}) {
+  clearElement(results);
+
+  if (mode === "users") {
+    for (let index = 0; index < 4; index += 1) {
+      const card = createElement("div", {
+        className: "profile-card search-user-card search-user-card-skeleton"
+      });
+      const avatar = createElement("span", {
+        className: "feed-skeleton-circle"
+      });
+      const copy = createElement("div", {
+        className: "search-user-copy search-user-copy-skeleton"
+      });
+      const username = createElement("span", {
+        className: "feed-skeleton-block search-user-title-skeleton"
+      });
+      const location = createElement("span", {
+        className: "feed-skeleton-block search-user-meta-skeleton"
+      });
+      const hint = createElement("span", {
+        className: "feed-skeleton-block search-user-hint-skeleton"
+      });
+
+      copy.append(username, location, hint);
+      card.append(avatar, copy);
+      results.appendChild(card);
+    }
+
+    return;
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const card = createElement("article", {
+      className: "post-card post-card-skeleton"
+    });
+    const header = createElement("div", {
+      className: "post-card-header post-card-header-skeleton"
+    });
+    const avatar = createElement("span", {
+      className: "feed-skeleton-circle"
+    });
+    const authorMeta = createElement("div", {
+      className: "post-author-block"
+    });
+    const author = createElement("span", {
+      className: "feed-skeleton-block feed-skeleton-block-author"
+    });
+    const meta = createElement("span", {
+      className: "feed-skeleton-block feed-skeleton-block-meta"
+    });
+    const menu = createElement("span", {
+      className: "feed-skeleton-circle feed-skeleton-circle-sm"
+    });
+    const contentLineOne = createElement("span", {
+      className: "feed-skeleton-block feed-skeleton-block-content"
+    });
+    const contentLineTwo = createElement("span", {
+      className: "feed-skeleton-block feed-skeleton-block-content feed-skeleton-block-content-short"
+    });
+    const image = createElement("span", {
+      className: "feed-skeleton-rect feed-skeleton-rect-image"
+    });
+    const footer = createElement("div", {
+      className: "reaction-bar reaction-bar-skeleton"
+    });
+
+    authorMeta.append(author, meta);
+    header.append(avatar, authorMeta, menu);
+    footer.append(
+      createElement("span", { className: "feed-skeleton-chip" }),
+      createElement("span", { className: "feed-skeleton-chip" }),
+      createElement("span", { className: "feed-skeleton-chip feed-skeleton-chip-wide" })
+    );
+    card.append(header, contentLineOne, contentLineTwo, image, footer);
+    results.appendChild(card);
+  }
 }
 
 function renderUserResults(results, users, { currentUserId, visibleCount, onLoadMore }) {

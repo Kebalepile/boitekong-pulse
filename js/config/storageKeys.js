@@ -7,5 +7,6 @@ export const STORAGE_KEYS = {
   CONVERSATIONS: "bp_conversations",
   NOTIFICATIONS: "bp_notifications",
   REPORTS: "bp_reports",
-  CREATE_POST_BRIEF_DISMISSED: "bp_create_post_brief_dismissed"
+  CREATE_POST_BRIEF_DISMISSED: "bp_create_post_brief_dismissed",
+  LAST_ROUTE: "bp_last_route"
 };

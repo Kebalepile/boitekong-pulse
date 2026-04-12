@@ -24,6 +24,8 @@ Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `POST /api/auth/password-reset/request`
+- `POST /api/auth/password-reset/confirm`
 - `GET /api/auth/me`
 - `POST /api/auth/otp/send`
 - `POST /api/auth/otp/verify`
@@ -129,6 +131,7 @@ Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser
 
 - The API now refuses to start in `production` if `JWT_SECRET` is still the placeholder default.
 - The frontend still keeps browser caches for hydration/fallback, but the primary app flows are API-backed now.
+- Forgot-password reset uses SMS OTP, requires a phone number that already exists in the database, expires after 5 minutes, and can only be completed once every 24 hours.
 - Avatars still tolerate data URLs in the current migration phase.
 - Voice notes currently use the migration-friendly binary/base64 path and are persisted in Mongo instead of full inline `data:` URLs.
 - Voice-note creation can be capped per user per day with `VOICE_NOTES_PER_DAY_LIMIT`.

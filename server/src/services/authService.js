@@ -5,13 +5,51 @@ import { signAccessToken } from "../utils/token.js";
 import {
   validateExtension,
   validateLoginPassword,
-  validatePassword,
   validatePasswordConfirmation,
   validateRequiredPhoneNumber,
   validateTownship,
   validateUsername
 } from "../utils/validators.js";
 import { serializeUser } from "./userService.js";
+
+export async function assertRegistrationAvailability({ username, phoneNumber }) {
+  const [usernameOwner, phoneOwner] = await Promise.all([
+    User.findOne({ usernameLower: username.toLowerCase() }),
+    User.findOne({ phoneNumber })
+  ]);
+
+  if (usernameOwner) {
+    throw new AppError("Username already exists.", {
+      statusCode: 409,
+      code: "USERNAME_EXISTS",
+      field: "username"
+    });
+  }
+
+  if (phoneOwner) {
+    throw new AppError("Phone number already exists.", {
+      statusCode: 409,
+      code: "PHONE_NUMBER_EXISTS",
+      field: "phoneNumber"
+    });
+  }
+}
+
+export function validateRegistrationPayload(payload = {}) {
+  const safeUsername = validateUsername(payload.username);
+  const safePhoneNumber = validateRequiredPhoneNumber(payload.phoneNumber);
+  const safeTownship = validateTownship(payload.township);
+  const safeExtension = validateExtension(payload.extension);
+  const safePassword = validatePasswordConfirmation(payload.password, payload.confirmPassword);
+
+  return {
+    username: safeUsername,
+    phoneNumber: safePhoneNumber,
+    township: safeTownship,
+    extension: safeExtension,
+    password: safePassword
+  };
+}
 
 async function resolveLoginUser(identifier) {
   const safeIdentifier = typeof identifier === "string" ? identifier.trim() : "";
@@ -37,45 +75,25 @@ async function resolveLoginUser(identifier) {
   }
 }
 
-export async function registerUser(payload = {}) {
-  const safeUsername = validateUsername(payload.username);
-  const safePhoneNumber = validateRequiredPhoneNumber(payload.phoneNumber);
-  const safeTownship = validateTownship(payload.township);
-  const safeExtension = validateExtension(payload.extension);
-  const safePassword = validatePasswordConfirmation(payload.password, payload.confirmPassword);
+export async function registerUser(payload = {}, options = {}) {
+  const registrationData = validateRegistrationPayload(payload);
+  await assertRegistrationAvailability({
+    username: registrationData.username,
+    phoneNumber: registrationData.phoneNumber
+  });
 
-  const [usernameOwner, phoneOwner] = await Promise.all([
-    User.findOne({ usernameLower: safeUsername.toLowerCase() }),
-    User.findOne({ phoneNumber: safePhoneNumber })
-  ]);
-
-  if (usernameOwner) {
-    throw new AppError("Username already exists.", {
-      statusCode: 409,
-      code: "USERNAME_EXISTS",
-      field: "username"
-    });
-  }
-
-  if (phoneOwner) {
-    throw new AppError("Phone number already exists.", {
-      statusCode: 409,
-      code: "PHONE_NUMBER_EXISTS",
-      field: "phoneNumber"
-    });
-  }
-
-  const passwordHash = await bcrypt.hash(safePassword, 12);
+  const passwordHash = await bcrypt.hash(registrationData.password, 12);
 
   const user = await User.create({
-    username: safeUsername,
-    usernameLower: safeUsername.toLowerCase(),
-    phoneNumber: safePhoneNumber,
+    username: registrationData.username,
+    usernameLower: registrationData.username.toLowerCase(),
+    phoneNumber: registrationData.phoneNumber,
     passwordHash,
     location: {
-      township: safeTownship,
-      extension: safeExtension
-    }
+      township: registrationData.township,
+      extension: registrationData.extension
+    },
+    phoneVerified: options.phoneVerified === true
   });
 
   const token = signAccessToken({

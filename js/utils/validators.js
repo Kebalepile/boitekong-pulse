@@ -2,10 +2,13 @@ const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
 const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
 export const MAX_AVATAR_FILE_BYTES = 1024 * 1024;
+export const MAX_POST_IMAGE_BYTES = 1024 * 1024;
+export const MAX_IMAGE_SOURCE_FILE_BYTES = 12 * 1024 * 1024;
 export const MAX_POST_CONTENT_LENGTH = 1000;
 export const MAX_COMMENT_LENGTH = 300;
 export const MAX_REPORT_NOTE_LENGTH = 120;
-const ALLOWED_AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_LOCAL_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const ALLOWED_INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const ALLOWED_REACTION_TYPES = new Set(["like", "dislike"]);
 
 const COMMON_WEAK_PASSWORDS = new Set([
@@ -450,9 +453,16 @@ export function validateReactionType(value) {
 }
 
 export function validateImageUrl(value) {
-  const trimmed = value.trim();
+  const trimmed = String(value ?? "").trim();
 
   if (!trimmed) return "";
+
+  if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(trimmed)) {
+    return validateInlineImageDataUrl(trimmed, {
+      field: "image",
+      maxBytes: MAX_POST_IMAGE_BYTES
+    });
+  }
 
   try {
     const url = new URL(trimmed, window.location.origin);
@@ -473,25 +483,75 @@ export function validateImageUrl(value) {
 }
 
 export function validateAvatarFile(file) {
+  return validateLocalImageFile(file, {
+    field: "avatar",
+    label: "Profile photo"
+  });
+}
+
+export function validatePostImageFile(file) {
+  return validateLocalImageFile(file, {
+    field: "image",
+    label: "Post image"
+  });
+}
+
+function validateLocalImageFile(file, { field = "image", label = "Image" } = {}) {
   if (!file) {
     return null;
   }
 
-  if (!ALLOWED_AVATAR_TYPES.has(file.type)) {
+  if (!ALLOWED_LOCAL_IMAGE_TYPES.has(file.type)) {
     throw makeError(
-      "AVATAR_TYPE_INVALID",
-      "avatar",
-      "Profile photo must be a PNG, JPG, or WEBP image."
+      `${field.toUpperCase()}_TYPE_INVALID`,
+      field,
+      `${label} must be a PNG, JPG, or WEBP image.`
     );
   }
 
-  if (file.size > MAX_AVATAR_FILE_BYTES) {
+  if (file.size > MAX_IMAGE_SOURCE_FILE_BYTES) {
     throw makeError(
-      "AVATAR_TOO_LARGE",
-      "avatar",
-      "Profile photo must be smaller than 1 MB."
+      `${field.toUpperCase()}_SOURCE_TOO_LARGE`,
+      field,
+      `${label} must be smaller than ${Math.round(MAX_IMAGE_SOURCE_FILE_BYTES / 1024 / 1024)} MB before compression.`
     );
   }
 
   return file;
+}
+
+function validateInlineImageDataUrl(
+  value,
+  { field = "image", maxBytes = MAX_POST_IMAGE_BYTES } = {}
+) {
+  const normalized = String(value || "").trim();
+  const match = normalized.match(/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=]+)$/i);
+
+  if (!match) {
+    throw makeError("IMAGE_URL_INVALID", field, "Image data is invalid.");
+  }
+
+  const mimeType = match[1].toLowerCase();
+
+  if (!ALLOWED_INLINE_IMAGE_TYPES.has(mimeType)) {
+    throw makeError(
+      "IMAGE_DATA_TYPE_INVALID",
+      field,
+      "Only PNG, JPG, and WEBP images are supported."
+    );
+  }
+
+  const base64Payload = match[2];
+  const paddingLength = (base64Payload.match(/=+$/)?.[0].length || 0);
+  const sizeBytes = Math.floor((base64Payload.length * 3) / 4) - paddingLength;
+
+  if (sizeBytes > maxBytes) {
+    throw makeError(
+      "IMAGE_DATA_TOO_LARGE",
+      field,
+      `Image must be ${Math.round(maxBytes / 1024 / 1024)} MB or smaller after compression.`
+    );
+  }
+
+  return normalized;
 }

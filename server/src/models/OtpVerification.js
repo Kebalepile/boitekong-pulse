@@ -4,6 +4,12 @@ const { Schema } = mongoose;
 
 const otpVerificationSchema = new Schema(
   {
+    purpose: {
+      type: String,
+      enum: ["phone_verification", "password_reset", "registration"],
+      default: "phone_verification",
+      index: true
+    },
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",
@@ -42,5 +48,6 @@ const otpVerificationSchema = new Schema(
 );
 
 otpVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+otpVerificationSchema.index({ phoneNumber: 1, purpose: 1, createdAt: -1 });
 
 export const OtpVerification = mongoose.model("OtpVerification", otpVerificationSchema);

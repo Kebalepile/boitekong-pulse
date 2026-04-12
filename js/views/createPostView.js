@@ -6,10 +6,12 @@ import {
   createFieldError
 } from "../utils/dom.js";
 import { createNavbar } from "../components/navbar.js";
+import { showLoadingOverlay } from "../components/loadingOverlay.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { createAndStorePost } from "../services/postService.js";
 import { storage } from "../storage/storage.js";
 import { showToast } from "../components/toast.js";
+import { createPostImageField } from "../components/postImageField.js";
 import { navigate } from "../router.js";
 import {
   MAX_POST_CONTENT_LENGTH,
@@ -41,7 +43,9 @@ export function renderCreatePost(app, currentUser) {
 
   const shell = createElement("section", { className: "feed-shell" });
   const navbar = createNavbar(currentUser, "create-post");
-  const main = createElement("main", { className: "profile-main editor-main" });
+  const main = createElement("main", {
+    className: "profile-main editor-main create-post-main"
+  });
 
   const infoCard = createElement("section", {
     className: "profile-card editor-card editor-brief-card create-post-brief-card"
@@ -65,12 +69,13 @@ export function renderCreatePost(app, currentUser) {
   });
   const infoText = createElement("p", {
     className: "section-copy",
-    text: "Post text when you have details, or switch to voice note when speaking is faster."
+    text: "Post text when you have details, add a photo when it helps, or switch to voice note when speaking is faster."
   });
   const tipsList = createElement("ul", { className: "helper-list" });
 
   [
     "Text posts stay focused on the update itself.",
+    "Add one optimized image to give extra context.",
     "Voice-note posts are capped at 1 minute.",
     "Keep posts clear enough for neighbors to act on."
   ].forEach((tip) => {
@@ -93,7 +98,7 @@ export function renderCreatePost(app, currentUser) {
   });
   const formText = createElement("p", {
     className: "section-copy",
-    text: "Choose the format that best fits what you want to share."
+    text: "Choose the format that best fits what you want to share. Text updates can include one photo."
   });
 
   const form = createElement("form", {
@@ -135,6 +140,12 @@ export function renderCreatePost(app, currentUser) {
     placeholder: "What's happening in your area?\nWhat's on your mind?",
     value: ""
   });
+  const imageField = createPostImageField({
+    form,
+    inputId: "post-image",
+    labelText: "Photo",
+    titleText: "Add a post image"
+  });
   const voiceComposer = voiceNoteFeatureStatus.supported
     ? createPostVoiceComposer({
         onError: (message) => showToast(message, "error")
@@ -159,7 +170,7 @@ export function renderCreatePost(app, currentUser) {
     voicePanel.appendChild(voiceComposer.root);
   }
 
-  textPanel.appendChild(contentField.wrapper);
+  textPanel.append(contentField.wrapper, imageField.wrapper);
 
   const actions = createElement("div", { className: "form-actions create-post-actions" });
   const cancelBtn = createElement("button", {
@@ -174,6 +185,43 @@ export function renderCreatePost(app, currentUser) {
   });
 
   let submissionMode = "text";
+  let isSubmitting = false;
+  let trackedDisabledStates = new Map();
+  let activeLoadingOverlay = null;
+
+  const syncSubmitButtonLabel = () => {
+    if (isSubmitting) {
+      submitBtn.textContent = submissionMode === "voice" ? "Publishing..." : "Posting...";
+      return;
+    }
+
+    submitBtn.textContent = submissionMode === "voice" ? "Publish voice note" : "Publish post";
+  };
+
+  const setSubmissionBusyState = (nextBusy) => {
+    isSubmitting = Boolean(nextBusy);
+
+    if (isSubmitting) {
+      trackedDisabledStates = new Map();
+      Array.from(form.querySelectorAll("button, input, textarea, select")).forEach((control) => {
+        trackedDisabledStates.set(control, control.disabled);
+        control.disabled = true;
+      });
+      form.classList.add("create-post-form-busy");
+      form.setAttribute("aria-busy", "true");
+    } else {
+      trackedDisabledStates.forEach((wasDisabled, control) => {
+        if (control) {
+          control.disabled = wasDisabled;
+        }
+      });
+      trackedDisabledStates = new Map();
+      form.classList.remove("create-post-form-busy");
+      form.removeAttribute("aria-busy");
+    }
+
+    syncSubmitButtonLabel();
+  };
 
   const updateMode = (nextMode) => {
     submissionMode = nextMode;
@@ -191,7 +239,7 @@ export function renderCreatePost(app, currentUser) {
     textPanel.classList.toggle("create-post-mode-panel-active", isTextMode);
     voicePanel.classList.toggle("create-post-mode-panel-active", !isTextMode);
     contentField.input.required = isTextMode;
-    submitBtn.textContent = isTextMode ? "Publish post" : "Publish voice note";
+    syncSubmitButtonLabel();
 
     if (isTextMode && voiceComposer) {
       voiceComposer.clear();
@@ -230,11 +278,22 @@ export function renderCreatePost(app, currentUser) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (isSubmitting) {
+      return;
+    }
+
     clearFormErrors(form);
 
     try {
       if (submissionMode === "voice" && voiceComposer?.isRecording()) {
         throw new Error("Stop the voice note recording before publishing.");
+      }
+
+      if (submissionMode === "text" && imageField.isProcessing()) {
+        const pendingImageError = new Error("Please wait for the image to finish optimizing.");
+        pendingImageError.field = "image";
+        throw pendingImageError;
       }
 
       const postPayload =
@@ -248,20 +307,36 @@ export function renderCreatePost(app, currentUser) {
               voiceNote: null
             });
 
+      setSubmissionBusyState(true);
+      activeLoadingOverlay = showLoadingOverlay({
+        label: submissionMode === "voice" ? "Publishing voice note..." : "Posting..."
+      });
+
       await createAndStorePost({
         content: postPayload.content,
         voiceNote: postPayload.voiceNote,
-        image: ""
+        image: submissionMode === "text" ? imageField.getValue() : ""
       });
 
       if (voiceComposer) {
         voiceComposer.clear();
       }
 
-      showToast("Post created successfully.", "success");
-      navigate("feed");
+      imageField.clear({
+        statusText: "No image selected."
+      });
+
+      showToast("Your update is live in the feed.", "success", {
+        variant: "post-success",
+        durationMs: 1800
+      });
+      await navigate("feed");
     } catch (error) {
       handleCreatePostError(error, submissionMode);
+    } finally {
+      activeLoadingOverlay?.close();
+      activeLoadingOverlay = null;
+      setSubmissionBusyState(false);
     }
   });
 }
@@ -754,6 +829,11 @@ function handleCreatePostError(error, submissionMode) {
 
   if (submissionMode === "text" && (field === "content" || message.toLowerCase().includes("post content"))) {
     setFieldError("post-content", message);
+    return;
+  }
+
+  if (field === "image" || field === "imageUrl") {
+    setFieldError("post-image", message);
     return;
   }
 

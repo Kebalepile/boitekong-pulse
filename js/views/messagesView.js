@@ -44,6 +44,7 @@ import {
   deleteMessageForEveryone,
   getConversationById,
   getConversationsForUser,
+  getConversationWithUser,
   getOrCreateConversation,
   getUnreadMessageCountForConversation,
   loadConversations,
@@ -69,42 +70,22 @@ const messagesUiState = {
 
 export async function renderMessages(app, currentUser, payload = null) {
   clearElement(app);
+  const shell = createElement("section", { className: "feed-shell" });
+  const navbar = createNavbar(currentUser, "messages");
+  const main = createElement("main", { className: "feed-main messages-main" });
 
-  try {
-    await Promise.all([
-      loadConversations({
-        currentUserId: currentUser.id,
-        force: true
-      }),
-      loadUserDirectory()
-    ]);
-  } catch (error) {
-    showToast(error.message || "Could not load messages right now.", "error");
-  }
+  shell.append(navbar, main);
+  app.appendChild(shell);
 
   const activeConversation = await resolveActiveConversation(currentUser.id, payload);
   const activeConversationId = activeConversation?.id || null;
   const editingMessageId =
     typeof payload?.editingMessageId === "string" ? payload.editingMessageId : "";
 
-  if (activeConversationId) {
-    await markConversationRead({
-      conversationId: activeConversationId,
-      userId: currentUser.id
-    });
-    clearConversationNotifications({
-      userId: currentUser.id,
-      conversationId: activeConversationId
-    });
-  }
-
   const conversations = getConversationsForUser(currentUser.id);
   const activeConversationRecord = activeConversationId
     ? getConversationById(activeConversationId)
     : null;
-  const shell = createElement("section", { className: "feed-shell" });
-  const navbar = createNavbar(currentUser, "messages");
-  const main = createElement("main", { className: "feed-main messages-main" });
   const layout = createElement("section", {
     className: `messages-layout${activeConversationRecord ? " messages-layout-thread-open" : ""}`
   });
@@ -122,9 +103,29 @@ export async function renderMessages(app, currentUser, payload = null) {
 
   layout.append(conversationListCard.element, conversationPanel.element);
 
-  main.appendChild(layout);
-  shell.append(navbar, main);
-  app.appendChild(shell);
+  main.replaceChildren(layout);
+
+  if (activeConversationId) {
+    clearConversationNotifications({
+      userId: currentUser.id,
+      conversationId: activeConversationId
+    });
+    void markConversationRead({
+      conversationId: activeConversationId,
+      userId: currentUser.id
+    }).catch(() => {});
+  }
+
+  void loadConversations({
+    currentUserId: currentUser.id,
+    force: false
+  }).catch((error) => {
+    showToast(error.message || "Could not load messages right now.", "error");
+  });
+
+  void loadUserDirectory().catch((error) => {
+    showToast(error.message || "Could not load messages right now.", "error");
+  });
 
   registerViewCleanup(
     subscribeToConversationChanges(() => {
@@ -142,12 +143,118 @@ export async function renderMessages(app, currentUser, payload = null) {
   );
 }
 
+function createMessagesLoadingSkeleton() {
+  const layout = createElement("section", {
+    className: "messages-layout messages-layout-loading"
+  });
+  const listCard = createElement("section", {
+    className: "profile-card messages-card messages-list-card messages-loading-card"
+  });
+  const listHeader = createElement("div", {
+    className: "messages-list-header messages-loading-header"
+  });
+  const title = createElement("span", {
+    className: "feed-skeleton-block messages-loading-title"
+  });
+  const action = createElement("span", {
+    className: "feed-skeleton-chip messages-loading-chip"
+  });
+  const search = createElement("span", {
+    className: "feed-skeleton-rect messages-loading-search"
+  });
+  const list = createElement("div", {
+    className: "messages-thread-list messages-loading-list"
+  });
+  const panelCard = createElement("section", {
+    className: "profile-card messages-card messages-panel-card messages-loading-card"
+  });
+  const panelHeader = createElement("div", {
+    className: "messages-panel-header messages-loading-panel-header"
+  });
+  const panelHero = createElement("div", {
+    className: "messages-loading-panel-hero"
+  });
+  const panelAvatar = createElement("span", {
+    className: "feed-skeleton-circle"
+  });
+  const panelName = createElement("span", {
+    className: "feed-skeleton-block messages-loading-panel-title"
+  });
+  const panelMeta = createElement("span", {
+    className: "feed-skeleton-block messages-loading-panel-meta"
+  });
+  const bubbleList = createElement("div", {
+    className: "messages-panel-body messages-loading-bubbles"
+  });
+  const composer = createElement("div", {
+    className: "messages-composer messages-loading-composer"
+  });
+  const composerInput = createElement("span", {
+    className: "feed-skeleton-rect messages-loading-composer-input"
+  });
+  const composerBtn = createElement("span", {
+    className: "feed-skeleton-chip messages-loading-composer-btn"
+  });
+
+  listHeader.append(title, action);
+  listCard.append(listHeader, search, list);
+
+  panelHero.append(panelAvatar, panelName, panelMeta);
+  panelHeader.append(panelHero);
+  panelCard.append(panelHeader, bubbleList, composer);
+
+  for (let index = 0; index < 5; index += 1) {
+    const item = createElement("div", {
+      className: "messages-loading-thread-item"
+    });
+    const avatar = createElement("span", {
+      className: "feed-skeleton-circle"
+    });
+    const copy = createElement("div", {
+      className: "messages-loading-thread-copy"
+    });
+    const name = createElement("span", {
+      className: "feed-skeleton-block messages-loading-thread-title"
+    });
+    const preview = createElement("span", {
+      className: "feed-skeleton-block messages-loading-thread-preview"
+    });
+
+    copy.append(name, preview);
+    item.append(avatar, copy);
+    list.appendChild(item);
+  }
+
+  for (let index = 0; index < 4; index += 1) {
+    bubbleList.appendChild(
+      createElement("span", {
+        className: `feed-skeleton-rect messages-loading-bubble${
+          index % 2 === 0 ? " messages-loading-bubble-self" : ""
+        }`
+      })
+    );
+  }
+
+  composer.append(composerInput, composerBtn);
+  layout.append(listCard, panelCard);
+  return layout;
+}
+
 async function resolveActiveConversation(currentUserId, payload) {
   const conversationId =
     typeof payload?.conversationId === "string" ? payload.conversationId : "";
   const targetUserId = typeof payload?.userId === "string" ? payload.userId : "";
 
   if (targetUserId && targetUserId !== currentUserId) {
+    const existingConversation = getConversationWithUser({
+      currentUserId,
+      targetUserId
+    });
+
+    if (existingConversation) {
+      return existingConversation;
+    }
+
     try {
       return await getOrCreateConversation({
         currentUserId,
@@ -562,6 +669,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   }
 
   let conversationState = conversation;
+  let editingMessageIdState = editingMessageId;
   const otherUser = getConversationPartner(conversation, currentUser.id);
   const availability = getDirectMessageAvailability({
     senderUserId: currentUser.id,
@@ -820,7 +928,25 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
             conversationId: conversationState.id,
             message,
             seenUser: message.id === lastSeenOwnMessageId ? otherUser : null,
-            isEditing: editingMessageId === message.id
+            isEditing: editingMessageIdState === message.id,
+            onStartEdit: (messageId) => {
+              editingMessageIdState = messageId;
+              renderMessagesList({ preserveScrollPosition: true });
+            },
+            onCancelEdit: () => {
+              editingMessageIdState = "";
+              renderMessagesList({ preserveScrollPosition: true });
+            },
+            onMessageUpdated: (nextConversation) => {
+              editingMessageIdState = "";
+              conversationState = nextConversation;
+              renderMessagesList({ preserveScrollPosition: true });
+            },
+            onMessageDeleted: (nextConversation) => {
+              editingMessageIdState = "";
+              conversationState = nextConversation;
+              renderMessagesList({ preserveScrollPosition: true });
+            }
           })
         );
       });
@@ -904,7 +1030,16 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         voiceComposer.clear();
       }
 
-      void navigate("messages", { conversationId: updatedConversation.id });
+      input.value = "";
+      conversationState = updatedConversation;
+      syncComposerControls();
+      renderMessagesList({ stickToBottom: true });
+
+      requestAnimationFrame(() => {
+        if (!editingMessageIdState) {
+          input.focus({ preventScroll: true });
+        }
+      });
     } catch (error) {
       const message = isVoiceNoteDailyLimitError(error)
         ? getVoiceNoteDailyLimitMessage(error)
@@ -919,7 +1054,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   renderMessagesList({ stickToBottom: true });
 
   requestAnimationFrame(() => {
-    if (!editingMessageId) {
+    if (!editingMessageIdState) {
       input.focus({ preventScroll: true });
     }
   });
@@ -927,7 +1062,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   return {
     element: card,
     refresh(nextConversation) {
-      if (!nextConversation || editingMessageId) {
+      if (!nextConversation || editingMessageIdState) {
         return;
       }
 
@@ -969,7 +1104,11 @@ function createMessageBubble({
   conversationId,
   message,
   seenUser = null,
-  isEditing = false
+  isEditing = false,
+  onStartEdit = () => {},
+  onCancelEdit = () => {},
+  onMessageUpdated = () => {},
+  onMessageDeleted = () => {}
 }) {
   const isOwnMessage = message.senderId === currentUser.id;
   const isVoiceMessage =
@@ -1007,10 +1146,7 @@ function createMessageBubble({
         actions.push({
           label: "Edit",
           onSelect: () => {
-            void navigate("messages", {
-              conversationId,
-              editingMessageId: message.id
-            });
+            onStartEdit(message.id);
           }
         });
       }
@@ -1026,11 +1162,11 @@ function createMessageBubble({
             danger: true,
             onConfirm: async () => {
               try {
-                await deleteMessageForEveryone({
+                const updatedConversation = await deleteMessageForEveryone({
                   conversationId,
                   messageId: message.id
                 });
-                void navigate("messages", { conversationId });
+                onMessageDeleted(updatedConversation);
               } catch (error) {
                 showToast(error.message || "Could not delete that message.", "error");
               }
@@ -1058,7 +1194,9 @@ function createMessageBubble({
     bubble.appendChild(
       createMessageEditForm({
         conversationId,
-        message
+        message,
+        onCancel: onCancelEdit,
+        onSave: onMessageUpdated
       })
     );
     stack.appendChild(bubble);
@@ -1151,7 +1289,7 @@ function createMessageBubble({
   return stack;
 }
 
-function createMessageEditForm({ conversationId, message }) {
+function createMessageEditForm({ conversationId, message, onCancel = () => {}, onSave = () => {} }) {
   const form = createElement("form", {
     className: "messages-edit-form"
   });
@@ -1187,19 +1325,19 @@ function createMessageEditForm({ conversationId, message }) {
   form.append(input, actions, timeLimit);
 
   cancelBtn.addEventListener("click", () => {
-    void navigate("messages", { conversationId });
+    onCancel();
   });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
     try {
-      await updateMessage({
+      const updatedConversation = await updateMessage({
         conversationId,
         messageId: message.id,
         text: input.value
       });
-      void navigate("messages", { conversationId });
+      onSave(updatedConversation);
     } catch (error) {
       showToast(error.message || "Could not update that message.", "error");
     }
