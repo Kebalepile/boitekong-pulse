@@ -10,7 +10,9 @@ import { navigate, registerViewCleanup } from "../router.js";
 import { showToast } from "../components/toast.js";
 import { showUserPreviewSheet } from "../components/userPreviewSheet.js";
 import {
+  deleteAuthenticatedUserAvatar,
   requestPhoneVerificationOtp,
+  uploadAuthenticatedUserAvatar,
   updateAuthenticatedUserProfile,
   verifyAuthenticatedUserPhoneOtp
 } from "../services/authService.js";
@@ -30,12 +32,15 @@ import {
   getFollowerUsers,
   getFollowingUsers,
   fetchFollowerUsers,
-  fetchFollowingUsers
+  fetchFollowingUsers,
+  syncCurrentUserFromApi
 } from "../services/userService.js";
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
 import { showLoadingOverlay } from "../components/loadingOverlay.js";
 
 const PROFILE_LOAD_PLACEHOLDER_TIMEOUT_MS = 3000;
+const PROFILE_AVATAR_SCALE_STEPS = [1, 0.82, 0.68, 0.56];
+const PROFILE_AVATAR_QUALITY_STEPS = [0.84, 0.72, 0.6];
 
 function waitFor(ms) {
   return new Promise((resolve) => {
@@ -110,7 +115,9 @@ export async function renderProfile(app, currentUser, payload = null) {
   const followerCount = followerUsers.length;
   const followingCount = followingUsers.length;
   const avatarState = {
-    dataUrl: currentUser.avatarDataUrl || "",
+    savedDataUrl: currentUser.avatarDataUrl || "",
+    pendingDataUrl: "",
+    pendingBlob: null,
     pending: false,
     requestToken: 0
   };
@@ -216,7 +223,8 @@ export async function renderProfile(app, currentUser, payload = null) {
     profileEditor = createProfileEditForm({
       currentUser,
       avatarState,
-      avatarPreview
+      avatarPreview,
+      onAvatarStateChange: syncAvatarPreviewAndInteractivity
     });
     main.append(summaryCard, profileEditor.formCard);
   } else {
@@ -246,7 +254,113 @@ export async function renderProfile(app, currentUser, payload = null) {
     })
   );
 
-  renderAvatarPreview(avatarPreview, currentUser);
+  let profilePhotoDeletePending = false;
+  let closeProfilePhotoViewer = null;
+
+  function syncAvatarPreviewAndInteractivity() {
+    renderAvatarPreview(avatarPreview, {
+      username: document.getElementById("profile-username")?.value || currentUser.username,
+      avatarDataUrl: getActiveAvatarDataUrl(avatarState)
+    });
+    syncAvatarPreviewInteractivity();
+  }
+
+  function syncAvatarPreviewInteractivity() {
+    const canOpenViewer =
+      Boolean(avatarState.savedDataUrl) &&
+      !hasPendingAvatarSelection(avatarState) &&
+      !profilePhotoDeletePending;
+
+    avatarPreviewShell.classList.toggle(
+      "profile-avatar-preview-shell-clickable",
+      canOpenViewer
+    );
+
+    if (canOpenViewer) {
+      avatarPreviewShell.tabIndex = 0;
+      avatarPreviewShell.setAttribute("role", "button");
+      avatarPreviewShell.setAttribute("aria-label", "Open profile photo");
+      return;
+    }
+
+    avatarPreviewShell.tabIndex = -1;
+    avatarPreviewShell.removeAttribute("role");
+    avatarPreviewShell.removeAttribute("aria-label");
+  }
+
+  const openProfilePhotoViewer = () => {
+    if (
+      !avatarState.savedDataUrl ||
+      hasPendingAvatarSelection(avatarState) ||
+      profilePhotoDeletePending
+    ) {
+      return;
+    }
+
+    closeProfilePhotoViewer?.();
+    closeProfilePhotoViewer = showProfilePhotoViewer({
+      imageUrl: avatarState.savedDataUrl,
+      username: currentUser.username,
+      onDelete: async () => {
+        if (profilePhotoDeletePending) {
+          return false;
+        }
+
+        profilePhotoDeletePending = true;
+        syncAvatarPreviewInteractivity();
+        const deleteOverlay = showLoadingOverlay({
+          label: "Removing profile photo..."
+        });
+
+        try {
+          const updatedUser = await deleteAuthenticatedUserAvatar({
+            currentUser
+          });
+          const syncedUser = await syncCurrentUserFromApi();
+
+          Object.assign(currentUser, updatedUser, syncedUser, {
+            avatarDataUrl: syncedUser.avatarDataUrl || "",
+            avatarUrl: syncedUser.avatarUrl || ""
+          });
+          avatarState.savedDataUrl = "";
+          avatarState.pendingDataUrl = "";
+          avatarState.pendingBlob = null;
+          profileEditor?.avatarUploadFieldController?.syncState("Profile photo removed.");
+          syncAvatarPreviewAndInteractivity();
+          showToast("Profile photo removed.", "success", {
+            variant: "updated-success",
+            durationMs: 1800
+          });
+          closeProfilePhotoViewer = null;
+          return true;
+        } catch (error) {
+          handleProfileError(error, {
+            switchToTab: profileEditor?.switchToTab
+          });
+          return false;
+        } finally {
+          deleteOverlay.close();
+          profilePhotoDeletePending = false;
+          syncAvatarPreviewInteractivity();
+        }
+      }
+    });
+  };
+
+  avatarPreviewShell.addEventListener("click", openProfilePhotoViewer);
+  avatarPreviewShell.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && avatarPreviewShell.tabIndex === 0) {
+      event.preventDefault();
+      openProfilePhotoViewer();
+    }
+  });
+
+  registerViewCleanup(() => {
+    closeProfilePhotoViewer?.();
+    closeProfilePhotoViewer = null;
+  });
+
+  syncAvatarPreviewAndInteractivity();
   syncMetaRow();
 
   if (!profileEditor) {
@@ -287,10 +401,7 @@ export async function renderProfile(app, currentUser, payload = null) {
 
   const usernameInput = document.getElementById("profile-username");
   usernameInput?.addEventListener("input", () => {
-    renderAvatarPreview(avatarPreview, {
-      username: usernameInput.value,
-      avatarDataUrl: avatarState.dataUrl
-    });
+    syncAvatarPreviewAndInteractivity();
   });
 
   profileEditor.form.addEventListener("submit", async (event) => {
@@ -323,23 +434,56 @@ export async function renderProfile(app, currentUser, payload = null) {
       profileSaveOverlay = showLoadingOverlay({
         label: "Saving profile..."
       });
-      await updateAuthenticatedUserProfile({
+      const pendingAvatarBlob =
+        hasPendingAvatarSelection(avatarState) && avatarState.pendingBlob
+          ? avatarState.pendingBlob
+          : null;
+      const updatedUser = await updateAuthenticatedUserProfile({
         currentUser,
         username,
         phoneNumber,
         township,
         extension,
-        avatarDataUrl: avatarState.dataUrl,
         currentPassword,
         newPassword,
         confirmNewPassword
       });
+      Object.assign(currentUser, updatedUser);
+      avatarState.savedDataUrl = updatedUser.avatarDataUrl || "";
+      if (!pendingAvatarBlob) {
+        avatarState.pendingDataUrl = "";
+        avatarState.pendingBlob = null;
+      }
+      syncAvatarPreviewAndInteractivity();
+
+      if (pendingAvatarBlob) {
+        try {
+          const avatarUser = await uploadAuthenticatedUserAvatar({
+            currentUser,
+            file: pendingAvatarBlob
+          });
+          const syncedUser = await syncCurrentUserFromApi();
+
+          Object.assign(currentUser, avatarUser, syncedUser, {
+            avatarDataUrl: syncedUser.avatarDataUrl || "",
+            avatarUrl: syncedUser.avatarUrl || ""
+          });
+          avatarState.savedDataUrl = syncedUser.avatarDataUrl || "";
+          avatarState.pendingDataUrl = "";
+          avatarState.pendingBlob = null;
+          profileEditor.avatarUploadFieldController?.syncState("Current photo ready.");
+          syncAvatarPreviewAndInteractivity();
+        } catch (error) {
+          error.message = `${error.message || "Could not upload the profile photo."} Your other profile changes were saved.`;
+          throw error;
+        }
+      }
 
       showToast("Your profile changes are live.", "success", {
         variant: "updated-success",
         durationMs: 1800
       });
-      await navigate("profile");
+      void navigate("profile");
     } catch (error) {
       handleProfileError(error, {
         switchToTab: profileEditor.switchToTab
@@ -437,7 +581,13 @@ function createProfileLoadingSkeleton({ activeSection = "home", showEditForm = f
   return fragment;
 }
 
-function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form }) {
+function createAvatarUploadField({
+  currentUser,
+  avatarState,
+  avatarPreview,
+  form,
+  onAvatarStateChange = null
+}) {
   const wrapper = createElement("div", {
     className: "field-group avatar-upload-field"
   });
@@ -445,25 +595,23 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
     className: "form-label",
     text: "Profile Photo"
   });
-  const panel = createElement("div", { className: "avatar-upload-panel" });
-  const copy = createElement("div", { className: "avatar-upload-copy" });
-  const title = createElement("strong", {
-    className: "avatar-upload-title",
-    text: "Choose a photo"
+  const controls = createElement("div", {
+    className: "avatar-upload-compact-row"
   });
-  const helper = createElement("p", {
-    className: "field-helper",
-    text: `PNG, JPG, or WEBP. We will optimize it to under ${Math.round(
-      MAX_AVATAR_FILE_BYTES / 1024 / 1024
-    )} MB before upload.`
+  const triggerBtn = createElement("button", {
+    className: "secondary-btn post-image-picker-btn avatar-picker-btn",
+    type: "button",
+    attributes: {
+      "aria-label": "Choose a profile photo",
+      title: "Choose a profile photo"
+    }
   });
   const status = createElement("p", {
-    className: "field-helper image-upload-status",
+    className: "field-helper image-upload-status avatar-upload-status",
     text: currentUser.avatarDataUrl ? "Current photo ready." : "No photo selected."
   });
-  const actions = createElement("div", { className: "avatar-upload-actions" });
   const input = createElement("input", {
-    className: "form-input avatar-file-input",
+    className: "form-input post-image-file-input-hidden",
     id: "profile-avatar",
     type: "file",
     attributes: {
@@ -471,14 +619,39 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
     }
   });
   const removeBtn = createElement("button", {
-    className: "secondary-btn avatar-remove-btn",
+    className: "secondary-btn post-image-compact-remove-btn avatar-remove-btn-compact",
     text: "Remove photo",
     type: "button"
   });
   const error = createFieldError("profile-avatar");
+
+  triggerBtn.appendChild(createImagePickerIcon());
+
   const syncStatus = (text = "") => {
     status.textContent = text;
   };
+  const syncState = (statusText = null) => {
+    const hasPendingSelection = hasPendingAvatarSelection(avatarState);
+
+    removeBtn.disabled = !hasPendingSelection || avatarState.pending === true;
+    removeBtn.hidden = !hasPendingSelection;
+    triggerBtn.disabled = avatarState.pending === true;
+    triggerBtn.setAttribute("aria-busy", avatarState.pending ? "true" : "false");
+    triggerBtn.classList.toggle("post-image-picker-btn-loading", avatarState.pending === true);
+    triggerBtn.setAttribute(
+      "aria-label",
+      avatarState.pending ? "Optimizing profile photo..." : "Choose a profile photo"
+    );
+    triggerBtn.setAttribute(
+      "title",
+      avatarState.pending ? "Optimizing profile photo..." : "Choose a profile photo"
+    );
+    syncStatus(statusText ?? getAvatarUploadStatusText(avatarState));
+  };
+
+  triggerBtn.addEventListener("click", () => {
+    input.click();
+  });
 
   input.addEventListener("change", async () => {
     clearFormErrors(form);
@@ -500,20 +673,24 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
       const optimizedAvatar = await compressImageFile(file, {
         maxBytes: MAX_AVATAR_FILE_BYTES,
         maxWidth: 512,
-        maxHeight: 512
+        maxHeight: 512,
+        scaleSteps: PROFILE_AVATAR_SCALE_STEPS,
+        qualitySteps: PROFILE_AVATAR_QUALITY_STEPS
       });
 
       if (avatarState.requestToken !== requestToken) {
         return;
       }
 
-      avatarState.dataUrl = optimizedAvatar.dataUrl;
+      avatarState.pendingDataUrl = optimizedAvatar.dataUrl;
+      avatarState.pendingBlob = optimizedAvatar.blob || null;
       avatarState.pending = false;
-      syncStatus(formatImageOptimizationSummary(optimizedAvatar, "Profile photo"));
+      syncState(formatImageOptimizationSummary(optimizedAvatar, "Profile photo"));
       renderAvatarPreview(avatarPreview, {
         username: document.getElementById("profile-username")?.value || currentUser.username,
-        avatarDataUrl: avatarState.dataUrl
+        avatarDataUrl: getActiveAvatarDataUrl(avatarState)
       });
+      onAvatarStateChange?.();
     } catch (errorObj) {
       if (requestToken && avatarState.requestToken !== requestToken) {
         return;
@@ -521,29 +698,62 @@ function createAvatarUploadField({ currentUser, avatarState, avatarPreview, form
 
       avatarState.pending = false;
       input.value = "";
-      syncStatus(avatarState.dataUrl ? "Current photo ready." : "No photo selected.");
+      avatarState.pendingBlob = null;
+      syncState();
       setFieldError("profile-avatar", errorObj.message || "Could not use that image.");
+      onAvatarStateChange?.();
     }
   });
 
   removeBtn.addEventListener("click", () => {
+    if (!hasPendingAvatarSelection(avatarState)) {
+      return;
+    }
+
     avatarState.requestToken += 1;
     avatarState.pending = false;
     input.value = "";
-    avatarState.dataUrl = "";
-    syncStatus("Photo removed.");
+    avatarState.pendingDataUrl = "";
+    avatarState.pendingBlob = null;
+    syncState("Selected photo removed.");
     renderAvatarPreview(avatarPreview, {
       username: document.getElementById("profile-username")?.value || currentUser.username,
-      avatarDataUrl: ""
+      avatarDataUrl: getActiveAvatarDataUrl(avatarState)
     });
+    onAvatarStateChange?.();
   });
 
-  copy.append(title, helper);
-  actions.append(input, removeBtn);
-  panel.append(copy, actions, status);
-  wrapper.append(label, panel, error);
+  controls.append(triggerBtn, removeBtn);
+  wrapper.append(label, input, controls, status, error);
 
-  return wrapper;
+  syncState();
+
+  return {
+    wrapper,
+    syncState
+  };
+}
+
+function createImagePickerIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("post-image-picker-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute(
+    "d",
+    "M5.5 6h13A1.5 1.5 0 0 1 20 7.5v9A1.5 1.5 0 0 1 18.5 18h-13A1.5 1.5 0 0 1 4 16.5v-9A1.5 1.5 0 0 1 5.5 6Zm2.75 2.75h.01M6.75 15.75l3.05-3.05a1 1 0 0 1 1.41 0l1.74 1.74a1 1 0 0 0 1.41 0l2.64-2.64"
+  );
+
+  svg.appendChild(path);
+  return svg;
 }
 
 function createPhoneVerificationField({
@@ -784,6 +994,187 @@ function renderAvatarPreview(container, userLike) {
   );
 }
 
+function getActiveAvatarDataUrl(avatarState) {
+  if (!avatarState) {
+    return "";
+  }
+
+  return String(avatarState.pendingDataUrl || avatarState.savedDataUrl || "").trim();
+}
+
+function hasPendingAvatarSelection(avatarState) {
+  if (!avatarState) {
+    return false;
+  }
+
+  return Boolean(String(avatarState.pendingDataUrl || "").trim());
+}
+
+function getAvatarUploadStatusText(avatarState) {
+  if (hasPendingAvatarSelection(avatarState)) {
+    return "Selected photo ready.";
+  }
+
+  return avatarState?.savedDataUrl ? "Current photo ready." : "No photo selected.";
+}
+
+function showProfilePhotoViewer({ imageUrl = "", username = "", onDelete = null } = {}) {
+  const normalizedImageUrl = String(imageUrl || "").trim();
+
+  if (!normalizedImageUrl) {
+    return () => {};
+  }
+
+  document.body.classList.remove("profile-photo-viewer-open");
+  document.getElementById("profile-photo-viewer-root")?.remove();
+  document.body.classList.add("profile-photo-viewer-open");
+
+  const root = createElement("div", {
+    className: "profile-photo-viewer-root",
+    attributes: {
+      id: "profile-photo-viewer-root"
+    }
+  });
+  const overlay = createElement("button", {
+    className: "profile-photo-viewer-overlay",
+    type: "button",
+    attributes: {
+      "aria-label": "Close profile photo"
+    }
+  });
+  const container = createElement("div", {
+    className: "profile-photo-viewer-container"
+  });
+  const card = createElement("section", {
+    className: "profile-photo-viewer-card",
+    attributes: {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": username ? `${username}'s profile photo` : "Profile photo"
+    }
+  });
+  const closeBtn = createElement("button", {
+    className: "profile-photo-viewer-close-btn",
+    type: "button",
+    attributes: {
+      "aria-label": "Close profile photo"
+    }
+  });
+  const frame = createElement("div", {
+    className: "profile-photo-viewer-frame"
+  });
+  const image = document.createElement("img");
+  image.className = "profile-photo-viewer-image";
+  image.src = normalizedImageUrl;
+  image.alt = username ? `${username}'s profile photo` : "Profile photo";
+  image.decoding = "async";
+  const deleteBtn = createElement("button", {
+    className: "profile-photo-viewer-delete-btn",
+    type: "button",
+    attributes: {
+      "aria-label": "Delete current profile photo",
+      title: "Delete current profile photo"
+    }
+  });
+
+  closeBtn.appendChild(createViewerIcon("close"));
+  deleteBtn.appendChild(createViewerIcon("trash"));
+  frame.append(image, deleteBtn);
+  card.append(closeBtn, frame);
+  container.appendChild(card);
+  root.append(overlay, container);
+
+  let closed = false;
+  let deleting = false;
+
+  const closeViewer = () => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    document.body.classList.remove("profile-photo-viewer-open");
+    document.removeEventListener("keydown", handleKeyDown);
+    root.remove();
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      closeViewer();
+    }
+  };
+
+  overlay.addEventListener("click", closeViewer);
+  container.addEventListener("click", (event) => {
+    if (event.target === container) {
+      closeViewer();
+    }
+  });
+  closeBtn.addEventListener("click", closeViewer);
+  card.addEventListener("click", (event) => {
+    if (event.target.closest(".profile-photo-viewer-delete-btn")) {
+      return;
+    }
+
+    closeViewer();
+  });
+  deleteBtn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+
+    if (deleting || typeof onDelete !== "function") {
+      return;
+    }
+
+    deleting = true;
+    deleteBtn.disabled = true;
+    closeBtn.disabled = true;
+
+    try {
+      const shouldClose = await onDelete();
+
+      if (shouldClose !== false) {
+        closeViewer();
+      }
+    } finally {
+      deleting = false;
+
+      if (!closed) {
+        deleteBtn.disabled = false;
+        closeBtn.disabled = false;
+      }
+    }
+  });
+
+  document.addEventListener("keydown", handleKeyDown);
+  document.body.appendChild(root);
+
+  return closeViewer;
+}
+
+function createViewerIcon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("profile-photo-viewer-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute(
+    "d",
+    name === "trash"
+      ? "M4 7h16m-11 0V5.8c0-.44.36-.8.8-.8h4.4c.44 0 .8.36.8.8V7m-8.5 0 .8 11.1c.05.72.65 1.27 1.37 1.27h6.06c.72 0 1.32-.55 1.37-1.27L17 7M10 10.5v5.5M14 10.5v5.5"
+      : "M6 6l12 12M18 6 6 18"
+  );
+
+  svg.appendChild(path);
+  return svg;
+}
+
 async function shareAppInvite(currentUser) {
   const username = currentUser?.username ? `@${currentUser.username}` : "me";
   const township = currentUser?.location?.township?.trim?.() || "";
@@ -926,7 +1317,12 @@ function createPeoplePanel({ currentUser, section, users = [] }) {
   return panel;
 }
 
-function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
+function createProfileEditForm({
+  currentUser,
+  avatarState,
+  avatarPreview,
+  onAvatarStateChange = null
+}) {
   const formCard = createElement("section", {
     className: "profile-card profile-form-card profile-edit-card"
   });
@@ -981,7 +1377,8 @@ function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
     currentUser,
     avatarState,
     avatarPreview,
-    form
+    form,
+    onAvatarStateChange
   });
   const usernameField = createField({
     labelText: "Username",
@@ -1015,10 +1412,10 @@ function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
     ?.addEventListener("input", phoneVerificationField.syncState);
   personalPanel.append(
     personalIntro,
+    avatarUploadField.wrapper,
     usernameField,
     phoneField,
-    phoneVerificationField.wrapper,
-    avatarUploadField
+    phoneVerificationField.wrapper
   );
 
   const credentialsPanel = createElement("section", {
@@ -1193,7 +1590,8 @@ function createProfileEditForm({ currentUser, avatarState, avatarPreview }) {
     formCard,
     form,
     switchToTab,
-    submitBtn
+    submitBtn,
+    avatarUploadFieldController: avatarUploadField
   };
 }
 

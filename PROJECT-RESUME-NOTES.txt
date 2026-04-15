@@ -1,5 +1,5 @@
 BOITEKONG PULSE - PROJECT RESUME NOTES
-Date: 2026-04-11
+Date: 2026-04-16
 
 PURPOSE OF THIS FILE
 - This is the quickest resume point for the next session.
@@ -42,6 +42,10 @@ CURRENT APP STATE
   - realtime websocket sync at `/api/realtime`
 - Browser notifications exist, but full push-notification infrastructure is NOT done.
 - Voice notes are stored through the current Mongo/base64-binary migration flow for now.
+- Profile avatar uploads are no longer kept as big data URLs in the main profile payload:
+  - avatar upload/delete is API-backed
+  - avatar files are stored on the server and served from `/uploads/avatars`
+  - frontend now prefers `avatarUrl` and syncs the current user from the API after avatar changes
 - Dedicated media/object storage is still a later step.
 
 CURRENT PHASE
@@ -58,6 +62,7 @@ INTERNAL STATUS SUMMARY
 - Main API slices are wired.
 - Live sync exists.
 - Remaining work is mostly verification, cleanup, and production hardening.
+- A lot of recent work has shifted from feature building to UX tightening, duplicate-protection, and launch cleanup.
 
 MAIN FRONTEND ROUTES
 - login
@@ -101,6 +106,9 @@ WHAT IS ALREADY BUILT
 2. PROFILE + COMMUNITY GRAPH
 - Profile page is built.
 - Edit profile is built.
+- Profile photo upload/replace/remove is API-backed.
+- Current profile photo can be viewed in a larger viewer and deleted from there.
+- Profile photo uploader now uses the same compact add-image icon pattern as post/edit-post upload.
 - Follow/unfollow is API-backed.
 - Followers/following lists are API-backed.
 - DM and notification settings are API-backed.
@@ -110,16 +118,27 @@ WHAT IS ALREADY BUILT
 - Feed loads from the API.
 - Create post is API-backed.
 - Edit/delete post is API-backed.
+- Client-side duplicate-submit protection exists for post creation.
+- Server-side duplicate-submit protection also exists for post creation.
 - Post reactions are API-backed.
 - Comments/replies are API-backed.
 - Comment reactions are API-backed.
 - Voice-note posts/comments/replies are supported in the current migration flow.
+- Voice-note posts can now include one image.
+- Create-post and edit-post now use compact image-picker UI instead of the older upload panel UI.
+- "See more posts" scroll behavior was fixed so loading more content no longer forces the user to start over from the top.
 
 4. DIRECT MESSAGES
 - Conversations load from the API.
 - Direct conversation creation is API-backed.
 - Send/edit/delete message is API-backed.
+- Client-side duplicate-submit protection exists for DM send.
+- Server-side duplicate-submit protection also exists for DM send.
 - Voice-note messages are supported.
+- Message reply UI exists:
+  - action-sheet reply entry
+  - swipe-to-reply flow
+  - reply target preview before send
 - Conversation archive/delete-from-inbox behavior is API-backed.
 - Read state is API-backed.
 - End-to-end encryption session handling exists on the frontend.
@@ -130,6 +149,10 @@ WHAT IS ALREADY BUILT
 - Conversation notifications can be cleared/read.
 - Browser notifications are wired for supported browsers.
 - Notification click routing is wired in the app.
+- Notification list now supports removing individual notifications.
+- Notification API payloads include the app logo.
+- Message notifications can open the exact chat.
+- Comment/reaction notifications can route into the feed and focus the related post.
 
 6. SEARCH
 - User search is API-backed.
@@ -157,17 +180,25 @@ WHAT IS ALREADY BUILT
 - `npm run cleanup:legacy-voice-notes`
 
 WHAT WAS CLEANED UP TODAY
-- Removed old unused browser-only user mutation leftovers from `js/services/userService.js`.
-- Removed the old unused frontend `js/models/userModel.js`.
-- Added `.env.example` for repeatable setup.
-- Added a production safety check so the API refuses to boot in `production` with the placeholder JWT secret.
-- Added forgot-password reset by SMS OTP.
-- Updated docs so they no longer describe the app as "backend scaffold only."
+- Migrated profile avatar handling away from large cached data URLs to API-backed upload/delete plus server-hosted avatar files.
+- Fixed stale avatar refresh/sync bugs so the new avatar URL is used immediately after profile changes.
+- Tightened DM availability state so enabling/disabling DMs updates search/profile/messages UI immediately.
+- Added DM reply interactions and improved related DM action-sheet UX.
+- Added duplicate-submit protection for both DMs and posts on client and server sides.
+- Added notification polish:
+  - app logo in notification payloads
+  - clear individual notifications
+  - open exact chat from message notifications
+  - open/focus related post from comment/reaction notifications
+- Fixed "see more" loading behavior for posts.
+- Reworked create-post, edit-post, and profile-photo image upload UI into a compact icon-based pattern.
+- Removed the now-unused older post image upload panel path/styles.
+- Allowed voice-note posts to include one image.
 
-TOMORROW'S MAIN TASKS
-- Run end-to-end manual QA in the browser against the real backend.
-- Test cellphone SMS OTP on a real device/provider path.
-- Fix any integration bugs found during QA before calling the app beta-ready.
+NEXT MAIN TASKS
+- Run real mobile QA on Friday afternoon, 2026-04-17, focusing on the flows changed recently.
+- Fix any spacing, tap-target, upload, voice-note, or notification routing issues found during that device pass.
+- After mobile QA, run a final production-readiness checklist rather than assuming "tested" equals "production-ready."
 
 RECOMMENDED QA ORDER
 1. Register
@@ -175,26 +206,36 @@ RECOMMENDED QA ORDER
 3. Forgot password request by registered phone number
 4. Forgot password OTP confirm within 5 minutes
 5. Edit profile
-6. Send OTP
-7. Verify OTP
-8. Create text post
-9. Create voice-note post
-10. Edit/delete eligible post
-11. Add comment/reply
-12. React to post/comment
-13. Search users/posts
-14. Follow/unfollow
-15. Block/unblock
-16. DM text
-17. DM voice note
-18. Edit/delete message
-19. Notification open/read flows
-20. Report post/comment with and without hide-for-me
-21. Multi-tab or multi-device live sync sanity check
+6. Profile photo:
+   - add photo
+   - replace photo
+   - remove pending selected photo before save
+   - open viewer
+   - delete current photo from viewer
+7. Send OTP
+8. Verify OTP
+9. Create text post
+10. Create voice-note post
+11. Create voice-note post with image
+12. Edit/delete eligible post
+13. Add comment/reply
+14. React to post/comment
+15. Search users/posts
+16. Follow/unfollow
+17. Block/unblock
+18. Toggle DM allow/disable and confirm UI updates immediately
+19. DM text
+20. DM voice note
+21. DM reply flow
+22. Edit/delete message
+23. Notification open/read/clear flows
+24. Report post/comment with and without hide-for-me
+25. Multi-tab or multi-device live sync sanity check
 
 WHAT IS STILL LEFT BEFORE A REAL BETA GO-LIVE
 - Real end-to-end QA needs to pass.
 - Real SMS OTP needs to pass with the live provider/device flow.
+- Real mobile-device QA still needs to pass for the recently updated upload/voice-note/DM/notification flows.
 - Production environment values must be set correctly:
   - JWT secret
   - CORS origin
@@ -202,13 +243,14 @@ WHAT IS STILL LEFT BEFORE A REAL BETA GO-LIVE
   - SMS API key
 - MongoDB Atlas/network access must be confirmed from the deployment environment.
 - Backup and restore expectations should be defined for Mongo.
+- Backup/retention expectations should also be defined for uploaded avatar files.
 - Monitoring/logging should be in place for the deployed API.
 - Auth and OTP abuse controls should be confirmed before public exposure.
 - PWA/service-worker behavior should be retested after backend deployment.
 - Legal/privacy/minimum public-facing product copy still needs final content if this will be publicly accessible.
 
 BETA GO-LIVE DECISION RULE
-- If browser QA passes tomorrow, that means the product flow is in a strong place.
+- If Friday/mobile QA passes, that means the product flow is in a strong place.
 - It does NOT automatically mean "production beta live" is fully safe.
 - For a controlled beta, the app is close.
 - For a public production beta, also confirm:
@@ -239,8 +281,9 @@ GOOD NEXT PROMPTS
 - "Resume from PROJECT-RESUME-NOTES.txt and debug the OTP flow."
 - "Resume from PROJECT-RESUME-NOTES.txt and harden the app for beta deploy."
 - "Resume from PROJECT-RESUME-NOTES.txt and update the deployment checklist."
+- "Resume from PROJECT-RESUME-NOTES.txt and help me work through the Friday mobile QA pass."
 
 FINAL RECOMMENDATION
-- Tomorrow should focus on QA plus real OTP verification, not new features.
-- If those pass, the app is close to controlled beta.
+- Friday should focus on real mobile QA plus OTP verification, not new features.
+- If those pass, the app is very close to controlled beta, but still run the production-readiness checklist before launch.
 - Do not treat "feature complete" as the same thing as "production safe."

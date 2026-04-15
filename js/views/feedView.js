@@ -9,7 +9,11 @@ import {
 } from "../services/postService.js";
 import { findUserById } from "../services/userService.js";
 import { createPostCard, openCommentsSheetForPost } from "../components/postCard.js";
-import { FEED_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
+import {
+  FEED_BATCH_SIZE,
+  createLoadMoreControl,
+  preservePageScrollPosition
+} from "../utils/listBatching.js";
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
 import { showToast } from "../components/toast.js";
 
@@ -22,7 +26,8 @@ export async function renderFeed(app, currentUser, payload = null) {
   let lastFilterKey = "";
   let isFeedLoading = true;
   let viewActive = true;
-  let pendingCommentsTarget =
+  let focusedPostTimeoutId = null;
+  let pendingPostTarget =
     typeof payload?.postId === "string"
       ? {
           postId: payload.postId,
@@ -82,6 +87,34 @@ export async function renderFeed(app, currentUser, payload = null) {
   feedMain.append(feedHeader, feedList);
   shell.append(navbar, feedMain);
   app.appendChild(shell);
+
+  const focusPostCard = (postId) => {
+    if (!postId) {
+      return false;
+    }
+
+    const postCard = feedList.querySelector(`[data-post-id="${postId}"]`);
+
+    if (!postCard) {
+      return false;
+    }
+
+    postCard.classList.add("post-card-targeted");
+    postCard.setAttribute("tabindex", "-1");
+    postCard.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+    postCard.focus({ preventScroll: true });
+    window.clearTimeout(focusedPostTimeoutId);
+    focusedPostTimeoutId = window.setTimeout(() => {
+      postCard.classList.remove("post-card-targeted");
+      postCard.removeAttribute("tabindex");
+      focusedPostTimeoutId = null;
+    }, 1800);
+
+    return true;
+  };
 
   const renderFeedSkeletons = () => {
     clearElement(statRow);
@@ -183,24 +216,33 @@ export async function renderFeed(app, currentUser, payload = null) {
           label: "See more posts",
           onClick: () => {
             visiblePostsCount += FEED_BATCH_SIZE;
-            renderPosts();
+            preservePageScrollPosition(() => {
+              renderPosts();
+            });
           }
         })
       );
     }
 
-    if (pendingCommentsTarget) {
-      const { postId, focusCommentId } = pendingCommentsTarget;
-      pendingCommentsTarget = null;
+    if (pendingPostTarget?.postId) {
+      const { postId, focusCommentId } = pendingPostTarget;
 
-      window.requestAnimationFrame(() => {
-        openCommentsSheetForPost({
-          postId,
-          currentUserId: currentUser.id,
-          onPostChange: renderPosts,
-          focusCommentId
+      if (focusCommentId) {
+        pendingPostTarget = null;
+        window.requestAnimationFrame(() => {
+          openCommentsSheetForPost({
+            postId,
+            currentUserId: currentUser.id,
+            onPostChange: renderPosts,
+            focusCommentId
+          });
         });
-      });
+        return;
+      }
+
+      if (focusPostCard(postId)) {
+        pendingPostTarget = null;
+      }
     }
   };
 
@@ -223,6 +265,9 @@ export async function renderFeed(app, currentUser, payload = null) {
   });
   registerViewCleanup(() => {
     viewActive = false;
+  });
+  registerViewCleanup(() => {
+    window.clearTimeout(focusedPostTimeoutId);
   });
   registerViewCleanup(
     subscribeToPostChanges(() => {

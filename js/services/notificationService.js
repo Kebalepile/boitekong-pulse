@@ -4,6 +4,8 @@ import { apiRequest } from "./apiClient.js";
 import { getHiddenTargetIdsForUser } from "./reportService.js";
 import { upsertUsers } from "./userService.js";
 
+const appNotificationIconUrl = new URL("../../assets/app-icon.png", import.meta.url).href;
+
 let notificationOpenHandler = null;
 const loadedNotificationUserIds = new Set();
 const notificationListeners = new Set();
@@ -197,6 +199,8 @@ function showBrowserNotification(notification, options = {}) {
   const { title, body } = options.copy || getBrowserNotificationCopy(notification);
   const browserNotification = new Notification(title, {
     body,
+    icon: appNotificationIconUrl,
+    badge: appNotificationIconUrl,
     tag:
       options.tag ||
       (notification.type === "dm" && notification.conversationId

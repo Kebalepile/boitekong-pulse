@@ -1,23 +1,11 @@
-import {
-  clearFormErrors,
-  createElement,
-  createFieldError,
-  setFieldError
-} from "../utils/dom.js";
-import {
-  compressImageFile,
-  formatImageOptimizationSummary
-} from "../utils/imageCompression.js";
+import { clearFormErrors, createElement, createFieldError, setFieldError } from "../utils/dom.js";
+import { compressImageFile } from "../utils/imageCompression.js";
 import { MAX_POST_IMAGE_BYTES, validatePostImageFile } from "../utils/validators.js";
 
 export function createPostImageField({
   form,
   inputId,
-  labelText = "Photo",
   titleText = "Attach a photo",
-  helperText = `PNG, JPG, or WEBP. We will optimize it to under ${
-    Math.round(MAX_POST_IMAGE_BYTES / 1024 / 1024)
-  } MB before upload.`,
   initialImage = ""
 } = {}) {
   const state = {
@@ -25,52 +13,41 @@ export function createPostImageField({
     pending: false,
     requestToken: 0
   };
+
   const wrapper = createElement("div", {
-    className: "field-group post-image-upload-field"
-  });
-  const label = createElement("label", {
-    className: "form-label",
-    text: labelText
-  });
-  const panel = createElement("div", {
-    className: "image-upload-panel post-image-upload-panel"
-  });
-  const copy = createElement("div", {
-    className: "image-upload-copy post-image-upload-copy"
-  });
-  const title = createElement("strong", {
-    className: "image-upload-title post-image-upload-title",
-    text: titleText
-  });
-  const helper = createElement("p", {
-    className: "field-helper",
-    text: helperText
-  });
-  const status = createElement("p", {
-    className: "field-helper image-upload-status",
-    text: state.dataUrl ? "Current image ready." : "No image selected."
-  });
-  const actions = createElement("div", {
-    className: "image-upload-actions post-image-upload-actions"
+    className: "field-group post-image-upload-field post-image-upload-field-compact"
   });
   const input = createElement("input", {
-    className: "form-input image-file-input post-image-file-input",
+    className: "form-input post-image-file-input-hidden",
     id: inputId,
     type: "file",
     attributes: {
       accept: "image/png,image/jpeg,image/webp"
     }
   });
+  const control = createElement("div", {
+    className: "post-image-compact-row"
+  });
+  const triggerBtn = createElement("button", {
+    className: "secondary-btn post-image-picker-btn",
+    type: "button",
+    attributes: {
+      "aria-label": titleText,
+      title: titleText
+    }
+  });
   const removeBtn = createElement("button", {
-    className: "secondary-btn image-upload-remove-btn post-image-remove-btn",
-    text: "Remove image",
+    className: "secondary-btn post-image-compact-remove-btn",
+    text: "Remove",
     type: "button"
   });
   const previewShell = createElement("div", {
-    className: "post-image-wrapper image-upload-preview-shell"
+    className: "post-image-wrapper image-upload-preview-shell post-image-preview-shell-compact"
   });
   const previewImage = document.createElement("img");
   const error = createFieldError(inputId);
+
+  triggerBtn.appendChild(createPostImagePickerIcon());
 
   previewImage.className = "post-image image-upload-preview-image";
   previewImage.alt = "Post image preview";
@@ -78,31 +55,52 @@ export function createPostImageField({
   previewImage.referrerPolicy = "no-referrer";
   previewShell.appendChild(previewImage);
 
-  const syncStatus = (text = "") => {
-    status.textContent = text;
-  };
-
   const syncPreview = () => {
+    const triggerText = state.dataUrl ? "Change image" : titleText;
+
+    triggerBtn.setAttribute("aria-label", triggerText);
+    triggerBtn.setAttribute("title", triggerText);
+
     if (!state.dataUrl) {
       previewImage.removeAttribute("src");
       previewShell.hidden = true;
-      removeBtn.disabled = true;
+      removeBtn.disabled = state.pending;
+      removeBtn.hidden = true;
       return;
     }
 
     previewImage.src = state.dataUrl;
     previewShell.hidden = false;
-    removeBtn.disabled = false;
+    removeBtn.disabled = state.pending;
+    removeBtn.hidden = false;
   };
 
-  const clear = ({ statusText = "Image removed." } = {}) => {
+  const syncPendingState = () => {
+    triggerBtn.disabled = state.pending;
+    triggerBtn.setAttribute("aria-busy", state.pending ? "true" : "false");
+    triggerBtn.classList.toggle("post-image-picker-btn-loading", state.pending);
+    triggerBtn.setAttribute(
+      "aria-label",
+      state.pending ? "Optimizing image..." : state.dataUrl ? "Change image" : titleText
+    );
+    triggerBtn.setAttribute(
+      "title",
+      state.pending ? "Optimizing image..." : state.dataUrl ? "Change image" : titleText
+    );
+  };
+
+  const clear = () => {
     state.requestToken += 1;
     state.pending = false;
     state.dataUrl = "";
     input.value = "";
-    syncStatus(statusText);
+    syncPendingState();
     syncPreview();
   };
+
+  triggerBtn.addEventListener("click", () => {
+    input.click();
+  });
 
   input.addEventListener("change", async () => {
     clearFormErrors(form);
@@ -120,7 +118,8 @@ export function createPostImageField({
 
       state.requestToken = requestToken;
       state.pending = true;
-      syncStatus("Optimizing image...");
+      syncPendingState();
+
       const optimizedImage = await compressImageFile(file, {
         maxBytes: MAX_POST_IMAGE_BYTES,
         maxWidth: 1600,
@@ -133,7 +132,7 @@ export function createPostImageField({
 
       state.dataUrl = optimizedImage.dataUrl;
       state.pending = false;
-      syncStatus(formatImageOptimizationSummary(optimizedImage, "Post image"));
+      syncPendingState();
       syncPreview();
     } catch (errorObj) {
       if (requestToken && state.requestToken !== requestToken) {
@@ -142,7 +141,8 @@ export function createPostImageField({
 
       state.pending = false;
       input.value = "";
-      syncStatus(state.dataUrl ? "Current image ready." : "No image selected.");
+      syncPendingState();
+      syncPreview();
       setFieldError(inputId, errorObj.message || "Could not use that image.");
     }
   });
@@ -151,17 +151,39 @@ export function createPostImageField({
     clear();
   });
 
-  copy.append(title, helper);
-  actions.append(input, removeBtn);
-  panel.append(copy, actions, status, previewShell);
-  wrapper.append(label, panel, error);
+  control.append(triggerBtn, removeBtn);
+  wrapper.append(input, previewShell, error);
 
+  syncPendingState();
   syncPreview();
 
   return {
     wrapper,
+    control,
     clear,
     getValue: () => state.dataUrl,
     isProcessing: () => state.pending
   };
+}
+
+function createPostImagePickerIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("post-image-picker-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute(
+    "d",
+    "M5.5 6h13A1.5 1.5 0 0 1 20 7.5v9A1.5 1.5 0 0 1 18.5 18h-13A1.5 1.5 0 0 1 4 16.5v-9A1.5 1.5 0 0 1 5.5 6Zm2.75 2.75h.01M6.75 15.75l3.05-3.05a1 1 0 0 1 1.41 0l1.74 1.74a1 1 0 0 0 1.41 0l2.64-2.64"
+  );
+
+  svg.appendChild(path);
+  return svg;
 }

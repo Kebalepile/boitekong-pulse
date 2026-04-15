@@ -1338,9 +1338,212 @@ li {
 
 .auth-site-footer-link,
 .auth-site-footer-meta-text {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
   color: #8e8e8e;
+
+}
+
+.auth-site-footer-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.auth-site-footer-link:hover,
+.auth-site-footer-link:focus-visible {
+  color: #475569;
+}
+
+.auth-site-footer-link-active {
+  color: #0f172a;
+  font-weight: 700;
+  cursor: default;
+}
+
+.auth-site-footer-link:disabled {
+  opacity: 1;
+}
+
+.public-info-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background:
+    radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 36%),
+    linear-gradient(180deg, #f8fbff 0%, #ffffff 38%, #f8fafc 100%);
+}
+
+.public-info-hero {
+  width: min(100%, 1080px);
+  margin: 0 auto;
+  padding: 28px 20px 16px;
+  display: grid;
+  gap: 18px;
+}
+
+.public-info-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.public-info-brand {
+  min-width: 0;
+}
+
+.public-info-back-btn {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.public-info-hero-copy {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+}
+
+.public-info-eyebrow {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+
+.public-info-title {
+  margin: 0;
+  font-size: clamp(30px, 6vw, 50px);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  color: #0f172a;
+}
+
+.public-info-intro {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.65;
+  color: #475569;
+}
+
+.public-info-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.public-info-tab {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #dbe5ef;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.public-info-tab:hover,
+.public-info-tab:focus-visible {
+  border-color: #93c5fd;
+  background: #ffffff;
+  color: #1d4ed8;
+}
+
+.public-info-tab-active {
+  border-color: #bfdbfe;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.public-info-tab:disabled {
+  opacity: 1;
+}
+
+.public-info-main {
+  width: min(100%, 1080px);
+  margin: 0 auto;
+  padding: 0 20px 32px;
+}
+
+.public-info-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
+}
+
+.public-info-section-list {
+  display: grid;
+  gap: 16px;
+}
+
+.public-info-section-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px 18px 20px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border: 1px solid #edf2f7;
+}
+
+.public-info-section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.public-info-section-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.public-info-paragraph {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #475569;
+}
+
+.public-info-contact-list {
+  display: grid;
+  gap: 12px;
+}
+
+.public-info-contact-item {
+  display: grid;
+  gap: 4px;
+}
+
+.public-info-contact-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.public-info-contact-link {
+  color: #1d4ed8;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.public-info-contact-link:hover,
+.public-info-contact-link:focus-visible {
+  text-decoration: underline;
+}
+
+.public-info-install-btn {
+  justify-self: start;
 }
 
 @keyframes auth-login-status-ripple {
@@ -1432,6 +1635,26 @@ li {
     grid-column: 1 / -1;
     max-width: 220px;
     justify-self: center;
+  }
+}
+
+@media (max-width: 720px) {
+  .public-info-hero {
+    padding: 22px 16px 14px;
+  }
+
+  .public-info-hero-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .public-info-main {
+    padding: 0 16px 28px;
+  }
+
+  .public-info-card {
+    border-radius: 7px;
+    padding: 18px;
   }
 }
 

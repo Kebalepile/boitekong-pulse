@@ -8,7 +8,9 @@ export async function compressImageFile(
     maxBytes = 1024 * 1024,
     maxWidth = 1600,
     maxHeight = 1600,
-    preferredMimeTypes = DEFAULT_MIME_TYPES
+    preferredMimeTypes = DEFAULT_MIME_TYPES,
+    scaleSteps = DEFAULT_SCALE_STEPS,
+    qualitySteps = DEFAULT_QUALITY_STEPS
   } = {}
 ) {
   const loadedImage = await loadImageFile(file);
@@ -20,6 +22,7 @@ export async function compressImageFile(
       loadedImage.height <= maxHeight
     ) {
       return {
+        blob: file,
         dataUrl: await readBlobAsDataUrl(file),
         mimeType: file.type || "image/jpeg",
         width: loadedImage.width,
@@ -43,9 +46,15 @@ export async function compressImageFile(
         )
       )
     );
+    const safeScaleSteps =
+      Array.isArray(scaleSteps) && scaleSteps.length > 0 ? scaleSteps : DEFAULT_SCALE_STEPS;
+    const safeQualitySteps =
+      Array.isArray(qualitySteps) && qualitySteps.length > 0
+        ? qualitySteps
+        : DEFAULT_QUALITY_STEPS;
     let bestCandidate = null;
 
-    for (const scale of DEFAULT_SCALE_STEPS) {
+    for (const scale of safeScaleSteps) {
       const width = Math.max(1, Math.round(fittedSize.width * scale));
       const height = Math.max(1, Math.round(fittedSize.height * scale));
       const canvas = document.createElement("canvas");
@@ -66,10 +75,9 @@ export async function compressImageFile(
       context.drawImage(loadedImage.image, 0, 0, width, height);
 
       for (const mimeType of mimeTypes) {
-        const qualitySteps =
-          mimeType === "image/png" ? [undefined] : DEFAULT_QUALITY_STEPS;
+        const nextQualitySteps = mimeType === "image/png" ? [undefined] : safeQualitySteps;
 
-        for (const quality of qualitySteps) {
+        for (const quality of nextQualitySteps) {
           const blob = await canvasToBlob(canvas, mimeType, quality);
 
           if (!blob) {
@@ -194,6 +202,7 @@ async function serializeCompressionResult({
   optimized
 }) {
   return {
+    blob,
     dataUrl: await readBlobAsDataUrl(blob),
     mimeType: blob.type || "image/jpeg",
     width,

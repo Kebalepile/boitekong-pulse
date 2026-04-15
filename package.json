@@ -8,8 +8,11 @@
     "check:db": "node server/src/scripts/smokeDatabase.js",
     "cleanup:legacy-voice-notes": "node server/src/scripts/purgeLegacyVoiceNotes.js",
     "dev:api": "node --watch server/src/server.js",
+    "dev:web": "node --watch server/src/scripts/serveWebApp.js",
     "start:api": "node server/src/server.js",
-    "check:api": "node --check server/src/server.js"
+    "start:web": "node server/src/scripts/serveWebApp.js",
+    "check:api": "node --check server/src/server.js",
+    "test:idempotency": "node server/src/services/idempotency.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

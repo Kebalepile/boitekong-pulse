@@ -735,6 +735,33 @@
   min-height: 168px;
 }
 
+.create-post-text-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.create-post-text-meta-row .field-helper {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+.create-post-text-media-slot,
+.create-post-voice-media-slot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.create-post-text-preview-slot,
+.create-post-voice-preview-slot {
+  display: grid;
+}
+
 .create-post-location-row {
   margin-top: -2px;
 }
@@ -753,13 +780,23 @@
 
 .create-post-voice-intro {
   display: grid;
-  gap: 4px;
+  gap: 8px;
+}
+
+.create-post-voice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 
 .create-post-voice-title {
   margin: 0;
   font-size: 16px;
   color: #0f172a;
+  flex: 1;
+  min-width: 0;
 }
 
 .create-post-voice-copy {
@@ -923,6 +960,18 @@
   border: 1px solid rgba(191, 219, 254, 0.8);
 }
 
+.profile-avatar-preview-shell-clickable {
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.profile-avatar-preview-shell-clickable:hover,
+.profile-avatar-preview-shell-clickable:focus-visible {
+  border-color: rgba(96, 165, 250, 0.95);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.14);
+  transform: translateY(-1px);
+}
+
 .profile-avatar-preview {
   display: grid;
   place-items: center;
@@ -943,91 +992,144 @@
   gap: 10px;
 }
 
-.image-upload-panel,
-.avatar-upload-panel {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px dashed #bfdbfe;
-  background: linear-gradient(180deg, #f8fbff 0%, #eff6ff 100%);
+.avatar-upload-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.image-upload-copy,
-.avatar-upload-copy {
-  display: grid;
-  gap: 4px;
+.avatar-upload-status {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
 }
 
-.image-upload-title,
-.avatar-upload-title {
-  font-size: 15px;
-  color: #0f172a;
-}
-
-.image-upload-actions,
-.avatar-upload-actions {
-  display: grid;
-  gap: 10px;
-}
-
-.image-file-input,
-.avatar-file-input {
-  background: #ffffff;
-}
-
-.post-image-file-input,
-.avatar-file-input {
-  min-height: 48px;
-  padding: 0;
-  border: 1px solid #dbe5ef;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.96);
-  color: #475569;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  cursor: pointer;
-}
-
-.post-image-file-input:hover,
-.post-image-file-input:focus-visible,
-.avatar-file-input:hover,
-.avatar-file-input:focus-visible {
-  border-color: #bfdbfe;
-  box-shadow: 0 0 0 4px rgba(191, 219, 254, 0.24);
-}
-
-.post-image-file-input::file-selector-button,
-.post-image-file-input::-webkit-file-upload-button,
-.avatar-file-input::file-selector-button,
-.avatar-file-input::-webkit-file-upload-button {
-  min-height: 46px;
-  margin-right: 14px;
-  padding: 0 18px;
-  border: none;
-  border-right: 1px solid #dbe5ef;
-  background: linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
-  color: #0f172a;
-  font-size: 13px;
+.avatar-remove-btn-compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #fff7f7 0%, #ffecec 100%);
+  color: #b91c1c;
+  font-size: 12px;
   font-weight: 700;
-  cursor: pointer;
+  line-height: 1.2;
+  box-shadow: none;
+  white-space: nowrap;
 }
 
-.post-image-file-input:hover::file-selector-button,
-.post-image-file-input:focus-visible::file-selector-button,
-.post-image-file-input:hover::-webkit-file-upload-button,
-.post-image-file-input:focus-visible::-webkit-file-upload-button,
-.avatar-file-input:hover::file-selector-button,
-.avatar-file-input:focus-visible::file-selector-button,
-.avatar-file-input:hover::-webkit-file-upload-button,
-.avatar-file-input:focus-visible::-webkit-file-upload-button {
-  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+.avatar-remove-btn-compact:hover,
+.avatar-remove-btn-compact:focus-visible {
+  transform: none;
+  border-color: #fca5a5;
+  background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
+  color: #991b1b;
+  box-shadow: 0 0 0 4px rgba(252, 165, 165, 0.16);
 }
 
-.image-upload-remove-btn,
-.avatar-remove-btn {
-  width: 100%;
+.avatar-remove-btn-compact[hidden] {
+  display: none;
+}
+
+.post-image-upload-field-compact {
+  gap: 8px;
+}
+
+.post-image-upload-field-compact .field-error {
+  min-height: 0;
+  font-size: 12px;
+}
+
+.post-image-upload-field-compact .field-error:empty {
+  display: none;
+}
+
+.post-image-file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.post-image-compact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.post-image-picker-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #475569;
+  box-shadow: none;
+}
+
+.post-image-picker-btn-loading {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  pointer-events: none;
+}
+
+.post-image-picker-btn-loading .post-image-picker-icon {
+  opacity: 0;
+}
+
+.post-image-picker-btn-loading::after {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(37, 99, 235, 0.22);
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  animation: post-image-picker-spin 0.85s linear infinite;
+}
+
+.post-image-picker-btn:hover,
+.post-image-picker-btn:focus-visible {
+  transform: none;
+  border-color: #bfdbfe;
+  box-shadow: 0 0 0 4px rgba(191, 219, 254, 0.2);
+  color: #2563eb;
+}
+
+.post-image-picker-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.post-image-compact-remove-btn {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: #64748b;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.post-image-compact-remove-btn[hidden] {
+  display: none;
 }
 
 .image-upload-status {
@@ -1036,6 +1138,143 @@
 
 .image-upload-preview-shell {
   margin-top: 2px;
+}
+
+.post-image-preview-shell-compact {
+  margin-top: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid #dbe5ef;
+  background: #f8fafc;
+}
+
+.post-image-preview-shell-compact .post-image {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+}
+
+@keyframes post-image-picker-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+body.profile-photo-viewer-open {
+  overflow: hidden;
+}
+
+.profile-photo-viewer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.profile-photo-viewer-overlay {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.profile-photo-viewer-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.profile-photo-viewer-card {
+  position: relative;
+  width: min(100%, 520px);
+  padding: 18px;
+  border-radius: 24px;
+  background: rgba(248, 250, 252, 0.98);
+  border: 1px solid rgba(226, 232, 240, 0.96);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.32);
+}
+
+.profile-photo-viewer-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #475569;
+}
+
+.profile-photo-viewer-close-btn:hover,
+.profile-photo-viewer-close-btn:focus-visible {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.profile-photo-viewer-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top left, rgba(191, 219, 254, 0.6), transparent 45%),
+    linear-gradient(180deg, #ffffff 0%, #eef4fb 100%);
+  border: 1px solid rgba(191, 219, 254, 0.9);
+}
+
+.profile-photo-viewer-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.profile-photo-viewer-delete-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 52px;
+  height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
+}
+
+.profile-photo-viewer-delete-btn:hover,
+.profile-photo-viewer-delete-btn:focus-visible {
+  background: #0f172a;
+}
+
+.profile-photo-viewer-close-btn:disabled,
+.profile-photo-viewer-delete-btn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.profile-photo-viewer-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
 .profile-channel-hero {
@@ -1310,6 +1549,59 @@
 @media (max-width: 640px) {
   .profile-edit-actions {
     width: 100%;
+  }
+
+  .create-post-text-meta-row,
+  .create-post-voice-header {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .create-post-text-media-slot,
+  .create-post-voice-media-slot {
+    min-width: 44px;
+  }
+
+  .create-post-voice-copy {
+    max-width: none;
+  }
+
+  .avatar-upload-compact-row {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .avatar-remove-btn-compact,
+  .post-image-compact-remove-btn {
+    min-height: 34px;
+    padding-inline: 10px;
+  }
+
+  .post-image-preview-shell-compact .post-image {
+    max-height: 240px;
+  }
+
+  .profile-photo-viewer-container {
+    padding: 14px;
+  }
+
+  .profile-photo-viewer-card {
+    width: 100%;
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .profile-photo-viewer-close-btn {
+    top: 10px;
+    right: 10px;
+  }
+
+  .profile-photo-viewer-delete-btn {
+    right: 12px;
+    bottom: 12px;
+    width: 48px;
+    height: 48px;
   }
 
   .profile-channel-banner {

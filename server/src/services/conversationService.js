@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import { Conversation } from "../models/Conversation.js";
 import { Message } from "../models/Message.js";
@@ -23,6 +24,8 @@ import { assertVoiceNoteCreationAllowed } from "./voiceNoteQuotaService.js";
 export const MESSAGE_EDIT_WINDOW_MS = 60 * 1000;
 const MAX_MESSAGE_TEXT_LENGTH = 2000;
 const MAX_ENCRYPTED_MESSAGE_LENGTH = 8192;
+const MESSAGE_DUPLICATE_WINDOW_MS = 4000;
+const MAX_CLIENT_REQUEST_ID_LENGTH = 128;
 
 function makeObjectIdError(field, message) {
   return new AppError(message, {
@@ -46,6 +49,40 @@ function normalizeMessageText(text) {
   return String(text ?? "")
     .replace(/\r\n/g, "\n")
     .trim();
+}
+
+function normalizeClientRequestId(clientRequestId) {
+  const normalizedClientRequestId =
+    typeof clientRequestId === "string" ? clientRequestId.trim() : "";
+
+  if (!normalizedClientRequestId) {
+    return "";
+  }
+
+  if (normalizedClientRequestId.length > MAX_CLIENT_REQUEST_ID_LENGTH) {
+    throw new AppError(
+      `Message request IDs must be ${MAX_CLIENT_REQUEST_ID_LENGTH} characters or fewer.`,
+      {
+        statusCode: 400,
+        code: "MESSAGE_REQUEST_ID_INVALID",
+        field: "clientRequestId"
+      }
+    );
+  }
+
+  return normalizedClientRequestId;
+}
+
+function normalizeReplyToMessageId(replyToMessageId) {
+  const normalizedReplyToMessageId =
+    typeof replyToMessageId === "string" ? replyToMessageId.trim() : "";
+
+  if (!normalizedReplyToMessageId) {
+    return "";
+  }
+
+  assertObjectId(normalizedReplyToMessageId, "replyToMessageId");
+  return normalizedReplyToMessageId;
 }
 
 function validateMessageInput({
@@ -129,11 +166,53 @@ function serializeReadBy(readBy = []) {
     : [];
 }
 
+function getVoiceNoteSignature(voiceNote = null) {
+  if (!voiceNote) {
+    return "";
+  }
+
+  const audioData =
+    voiceNote.audioData && Buffer.isBuffer(voiceNote.audioData) && voiceNote.audioData.length > 0
+      ? createHash("sha256").update(voiceNote.audioData).digest("hex")
+      : "";
+
+  return JSON.stringify({
+    audioData,
+    url: typeof voiceNote.url === "string" ? voiceNote.url : "",
+    storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey : "",
+    mimeType: typeof voiceNote.mimeType === "string" ? voiceNote.mimeType : "",
+    durationMs: Number(voiceNote.durationMs || 0),
+    size: Number(voiceNote.size || voiceNote.sizeBytes || 0),
+    waveform: Array.isArray(voiceNote.waveform) ? voiceNote.waveform : []
+  });
+}
+
+function getMessagePayloadSignature({
+  replyToMessageId = "",
+  text = "",
+  encryptedText = "",
+  encryption = null,
+  voiceNote = null
+}) {
+  return JSON.stringify({
+    replyToMessageId: normalizeReplyToMessageId(toIdString(replyToMessageId)),
+    text: normalizeMessageText(text),
+    encryptedText: normalizeEncryptedMessageText(encryptedText),
+    encryption: encryption || null,
+    voiceNote: getVoiceNoteSignature(voiceNote)
+  });
+}
+
+function isSameMessagePayload(message, safeMessage) {
+  return getMessagePayloadSignature(message) === getMessagePayloadSignature(safeMessage);
+}
+
 function serializeMessage(message) {
   return {
     id: toIdString(message._id),
     conversationId: toIdString(message.conversationId),
     senderId: toIdString(message.senderId),
+    replyToMessageId: toIdString(message.replyToMessageId),
     text: message.text || "",
     encryptedText: message.encryptedText || "",
     encryption: message.encryption || null,
@@ -226,6 +305,11 @@ async function serializeSingleConversation(conversation) {
   return serializedConversation || null;
 }
 
+async function serializeLatestConversation(conversationId) {
+  const latestConversation = await Conversation.findById(conversationId);
+  return latestConversation ? serializeSingleConversation(latestConversation) : null;
+}
+
 async function requireConversationForParticipant(conversationId, userId) {
   assertObjectId(conversationId, "conversationId");
 
@@ -264,6 +348,57 @@ async function requireMessageForConversation(conversationId, messageId) {
   }
 
   return message;
+}
+
+async function requireReplyTargetMessage(conversationId, replyToMessageId) {
+  const safeReplyToMessageId = normalizeReplyToMessageId(replyToMessageId);
+
+  if (!safeReplyToMessageId) {
+    return null;
+  }
+
+  const replyTargetMessage = await Message.findOne({
+    _id: safeReplyToMessageId,
+    conversationId
+  });
+
+  if (!replyTargetMessage) {
+    throw new AppError("Reply target message not found.", {
+      statusCode: 400,
+      code: "MESSAGE_REPLY_TARGET_NOT_FOUND",
+      field: "replyToMessageId"
+    });
+  }
+
+  return replyTargetMessage;
+}
+
+async function findRecentDuplicateMessage({
+  conversationId,
+  senderId,
+  safeMessage
+}) {
+  const recentMessages = await Message.find({
+    conversationId,
+    senderId,
+    deletedForEveryone: false,
+    createdAt: {
+      $gte: new Date(Date.now() - MESSAGE_DUPLICATE_WINDOW_MS)
+    }
+  })
+    .sort({ createdAt: -1 })
+    .limit(5);
+
+  return recentMessages.find((message) => isSameMessagePayload(message, safeMessage)) || null;
+}
+
+function isClientRequestIdDuplicateError(error) {
+  return (
+    error?.code === 11000 &&
+    Boolean(error?.keyPattern?.conversationId) &&
+    Boolean(error?.keyPattern?.senderId) &&
+    Boolean(error?.keyPattern?.clientRequestId)
+  );
 }
 
 async function createNotificationIfAllowed({
@@ -393,6 +528,8 @@ export async function getOrCreateConversation({ currentUserId, targetUserId }) {
 export async function sendMessage({
   currentUserId,
   conversationId,
+  clientRequestId = "",
+  replyToMessageId = "",
   text = "",
   encryptedText = "",
   encryption = null,
@@ -417,26 +554,93 @@ export async function sendMessage({
     encryption,
     voiceNote
   });
+  const safeClientRequestId = normalizeClientRequestId(clientRequestId);
+  const replyTargetMessage = await requireReplyTargetMessage(
+    conversation._id,
+    replyToMessageId
+  );
+  const comparableMessage = {
+    ...safeMessage,
+    replyToMessageId: toIdString(replyTargetMessage?._id)
+  };
+
+  if (safeClientRequestId) {
+    const existingRequestMessage = await Message.findOne({
+      conversationId: conversation._id,
+      senderId: currentUserId,
+      clientRequestId: safeClientRequestId
+    });
+
+    if (existingRequestMessage) {
+      if (!isSameMessagePayload(existingRequestMessage, comparableMessage)) {
+        throw new AppError("That message send request has already been used.", {
+          statusCode: 409,
+          code: "MESSAGE_REQUEST_ID_REUSED",
+          field: "clientRequestId"
+        });
+      }
+
+      return serializeLatestConversation(conversation._id);
+    }
+  }
+
+  const duplicateMessage = await findRecentDuplicateMessage({
+    conversationId: conversation._id,
+    senderId: currentUserId,
+    safeMessage: comparableMessage
+  });
+
+  if (duplicateMessage) {
+    return serializeLatestConversation(conversation._id);
+  }
 
   if (safeMessage.voiceNote) {
     await assertVoiceNoteCreationAllowed(currentUserId);
   }
 
   const createdAt = new Date();
-  const message = await Message.create({
-    conversationId: conversation._id,
-    senderId: currentUserId,
-    text: safeMessage.text,
-    encryptedText: safeMessage.encryptedText,
-    encryption: safeMessage.encryption,
-    voiceNote: safeMessage.voiceNote,
-    readBy: [
-      {
-        userId: currentUserId,
-        seenAt: createdAt
+  let message;
+
+  try {
+    message = await Message.create({
+      conversationId: conversation._id,
+      senderId: currentUserId,
+      clientRequestId: safeClientRequestId || null,
+      replyToMessageId: replyTargetMessage?._id || null,
+      text: safeMessage.text,
+      encryptedText: safeMessage.encryptedText,
+      encryption: safeMessage.encryption,
+      voiceNote: safeMessage.voiceNote,
+      readBy: [
+        {
+          userId: currentUserId,
+          seenAt: createdAt
+        }
+      ]
+    });
+  } catch (error) {
+    if (safeClientRequestId && isClientRequestIdDuplicateError(error)) {
+      const existingRequestMessage = await Message.findOne({
+        conversationId: conversation._id,
+        senderId: currentUserId,
+        clientRequestId: safeClientRequestId
+      });
+
+      if (existingRequestMessage) {
+        if (!isSameMessagePayload(existingRequestMessage, comparableMessage)) {
+          throw new AppError("That message send request has already been used.", {
+            statusCode: 409,
+            code: "MESSAGE_REQUEST_ID_REUSED",
+            field: "clientRequestId"
+          });
+        }
+
+        return serializeLatestConversation(conversation._id);
       }
-    ]
-  });
+    }
+
+    throw error;
+  }
 
   conversation.lastMessageId = message._id;
   conversation.lastMessageAt = message.createdAt;

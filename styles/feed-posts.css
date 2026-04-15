@@ -177,6 +177,12 @@
   position: relative;
 }
 
+.post-card-targeted {
+  box-shadow:
+    0 0 0 2px rgba(37, 99, 235, 0.18),
+    0 18px 42px rgba(37, 99, 235, 0.16);
+}
+
 .post-card-skeleton {
   gap: 16px;
   pointer-events: none;
@@ -279,6 +285,10 @@
 .post-content-block {
   display: grid;
   gap: 8px;
+}
+
+.post-content-block .comment-voice-note .voice-note-bubble-posted {
+  border-radius: 4px;
 }
 
 .post-content-toggle-btn {

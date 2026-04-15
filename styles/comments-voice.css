@@ -1346,16 +1346,6 @@ body.comments-sheet-open {
     justify-items: center;
   }
 
-  .image-upload-actions,
-  .avatar-upload-actions {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-
-  .image-upload-remove-btn,
-  .avatar-remove-btn {
-    width: auto;
-  }
 }
 
 @media (min-width: 960px) {

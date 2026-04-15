@@ -33,6 +33,8 @@ function normalizeMessageRecord(message = {}, conversationId = "") {
         ? message.conversationId
         : conversationId,
     senderId: typeof message.senderId === "string" ? message.senderId : "",
+    replyToMessageId:
+      typeof message.replyToMessageId === "string" ? message.replyToMessageId : "",
     text: typeof message.text === "string" ? message.text.trim() : "",
     encryptedText:
       typeof message.encryptedText === "string" ? message.encryptedText.trim() : "",
@@ -398,7 +400,13 @@ export async function getOrCreateConversation({ currentUserId, targetUserId }) {
   return syncConversation(await hydrateConversation(response.conversation));
 }
 
-export async function sendMessage({ conversationId, text, voiceNote = null }) {
+export async function sendMessage({
+  conversationId,
+  text,
+  voiceNote = null,
+  clientRequestId = "",
+  replyToMessageId = ""
+}) {
   const currentUser = await ensureCurrentUserEncryptionSession();
   const conversation = getConversationById(conversationId);
   const encryptedPayload =
@@ -416,6 +424,8 @@ export async function sendMessage({ conversationId, text, voiceNote = null }) {
   const response = await apiRequest(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
+      clientRequestId,
+      replyToMessageId,
       text: encryptedPayload.text,
       encryptedText: encryptedPayload.encryptedText,
       encryption: encryptedPayload.encryption,

@@ -5,6 +5,7 @@ import {
 } from "./services/authService.js";
 import { renderLogin } from "./views/loginView.js";
 import { renderRegister } from "./views/registerView.js";
+import { renderPublicInfo } from "./views/publicInfoView.js";
 import { renderFeed } from "./views/feedView.js";
 import { renderProfile } from "./views/profileView.js";
 import { renderCreatePost } from "./views/createPostView.js";
@@ -18,6 +19,10 @@ import { startLiveSync, stopLiveSync } from "./services/liveSyncService.js";
 import { showLoadingOverlay } from "./components/loadingOverlay.js";
 import { storage } from "./storage/storage.js";
 import { STORAGE_KEYS } from "./config/storageKeys.js";
+import {
+  resolvePublicInfoOrigin,
+  resolvePublicInfoPageKey
+} from "./config/publicInfoPages.js";
 
 const ROUTER_HISTORY_APP_ID = "boitekong-pulse";
 const RESTORABLE_ROUTE_NAMES = new Set([
@@ -98,6 +103,26 @@ function sanitizeSearchPayload(payload) {
   return Object.keys(nextPayload).length > 0 ? nextPayload : null;
 }
 
+function sanitizeFeedPayload(payload) {
+  const safePostId = typeof payload?.postId === "string" ? payload.postId.trim() : "";
+  const safeFocusCommentId =
+    typeof payload?.focusCommentId === "string" ? payload.focusCommentId.trim() : "";
+
+  if (!safePostId) {
+    return null;
+  }
+
+  const nextPayload = {
+    postId: safePostId
+  };
+
+  if (safeFocusCommentId) {
+    nextPayload.focusCommentId = safeFocusCommentId;
+  }
+
+  return nextPayload;
+}
+
 function sanitizeMessagesPayload(payload) {
   const nextPayload = {};
 
@@ -126,15 +151,26 @@ function sanitizeEditPostPayload(payload) {
   return null;
 }
 
+function sanitizePublicInfoPayload(payload) {
+  return {
+    page: resolvePublicInfoPageKey(payload?.page),
+    origin: resolvePublicInfoOrigin(payload?.origin)
+  };
+}
+
 function normalizeRouteState(routeName, payload = null) {
   switch (routeName) {
     case "login":
     case "register":
-    case "feed":
     case "create-post":
       return {
         routeName,
         payload: null
+      };
+    case "feed":
+      return {
+        routeName,
+        payload: sanitizeFeedPayload(payload)
       };
     case "profile":
       return {
@@ -155,6 +191,11 @@ function normalizeRouteState(routeName, payload = null) {
       return {
         routeName,
         payload: sanitizeEditPostPayload(payload)
+      };
+    case "public-info":
+      return {
+        routeName,
+        payload: sanitizePublicInfoPayload(payload)
       };
     default:
       return null;
@@ -240,6 +281,8 @@ function getRouteTransitionLabel(routeName, payload = null) {
         : "Loading messages...";
     case "search":
       return payload?.query ? "Loading search..." : "Opening search...";
+    case "public-info":
+      return "Opening page...";
     default:
       return "Loading...";
   }
@@ -297,7 +340,7 @@ export function registerViewCleanup(cleanup) {
 }
 
 async function requireAuth(app, renderFn, payload) {
-  const currentUser = getAuthenticatedUser() || (await resolveAuthenticatedUser());
+  const currentUser = await resolveAuthenticatedUser();
 
   if (!currentUser) {
     stopLiveSync();
@@ -368,6 +411,10 @@ export async function navigate(routeName, payload = null, options = {}) {
       case "register":
         stopLiveSync();
         renderRegister(app);
+        break;
+      case "public-info":
+        stopLiveSync();
+        renderPublicInfo(app, normalizedRouteState.payload);
         break;
       case "feed":
         routeHandled = await requireAuth(app, renderFeed, normalizedRouteState.payload);

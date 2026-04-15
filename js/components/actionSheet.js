@@ -97,6 +97,7 @@ export function showActionSheet({ title = "Options", actions = [] }) {
 function inferActionSheetIconName(label = "") {
   const normalized = String(label).trim().toLowerCase();
 
+  if (normalized.includes("reply")) return "reply";
   if (normalized.includes("share")) return "share";
   if (normalized.includes("report")) return "report";
   if (normalized.includes("edit")) return "edit";
@@ -130,6 +131,7 @@ function createActionSheetIcon(name) {
 
 function getActionSheetIconPath(name) {
   const iconPaths = {
+    reply: "M9 7 4 12l5 5M4.5 12H15a5 5 0 0 1 5 5",
     share: "m14 5-8 7 8 7M6 12h12",
     report: "M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z",
     edit: "m4 20 4.5-1 9.9-9.9a1.8 1.8 0 0 0 0-2.54l-.96-.96a1.8 1.8 0 0 0-2.54 0L5 15.5 4 20Zm8-12 4 4",

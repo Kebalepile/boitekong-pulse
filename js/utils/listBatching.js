@@ -8,6 +8,76 @@ export const CHAT_BATCH_SIZE = 8;
 export const NOTIFICATION_BATCH_SIZE = 8;
 export const DISCOVER_USERS_BATCH_SIZE = 8;
 export const THREAD_MESSAGE_BATCH_SIZE = 20;
+/**
+ * 
+ * Use for prodction
+ * export const FEED_BATCH_SIZE = 10;
+export const COMMENT_BATCH_SIZE = 6;
+export const REPLY_BATCH_SIZE = 4;
+export const SEARCH_BATCH_SIZE = 10;
+export const CHAT_BATCH_SIZE = 10;
+export const NOTIFICATION_BATCH_SIZE = 10;
+export const DISCOVER_USERS_BATCH_SIZE = 10;
+export const THREAD_MESSAGE_BATCH_SIZE = 24;
+
+ */
+
+function getDocumentScrollTop() {
+  if (typeof window === "undefined") {
+    return 0;
+  }
+
+  return window.scrollY || window.pageYOffset || 0;
+}
+
+export function preservePageScrollPosition(render) {
+  if (typeof render !== "function") {
+    return;
+  }
+
+  if (typeof window === "undefined") {
+    return render();
+  }
+
+  const previousScrollTop = getDocumentScrollTop();
+  const result = render();
+
+  void Promise.resolve(result).finally(() => {
+    window.requestAnimationFrame(() => {
+      window.scrollTo({
+        top: previousScrollTop,
+        behavior: "auto"
+      });
+    });
+  });
+
+  return result;
+}
+
+export function preserveElementScrollPosition(element, render) {
+  if (typeof render !== "function") {
+    return;
+  }
+
+  if (!element || typeof window === "undefined") {
+    return render();
+  }
+
+  const previousScrollTop = element.scrollTop;
+  const result = render();
+
+  void Promise.resolve(result).finally(() => {
+    window.requestAnimationFrame(() => {
+      if (!element.isConnected) {
+        return;
+      }
+
+      element.scrollTop = Math.max(0, previousScrollTop);
+    });
+  });
+
+  return result;
+}
 
 export function createLoadMoreControl({
   label = "See more",

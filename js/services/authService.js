@@ -3,9 +3,12 @@ import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { storage } from "../storage/storage.js";
 import {
   clearCurrentUser,
+  deleteUserAvatarRemote,
   getCurrentUser,
+  resetUserState,
   setCurrentUser,
   syncCurrentUserFromApi,
+  uploadUserAvatarRemote,
   updateUserProfileRemote,
   upsertUser
 } from "./userService.js";
@@ -20,6 +23,7 @@ function clearClientSessionState() {
   resetConversationState();
   resetNotificationState();
   resetReportState();
+  resetUserState();
   storage.remove(STORAGE_KEYS.USERS);
   clearAccessToken();
   clearCurrentUser();
@@ -168,6 +172,28 @@ export async function updateAuthenticatedUserProfile({
   });
 }
 
+export async function uploadAuthenticatedUserAvatar({ currentUser, file }) {
+  if (!currentUser?.id) {
+    const authError = new Error("You must be logged in.");
+    authError.code = "AUTH_REQUIRED";
+    throw authError;
+  }
+
+  return uploadUserAvatarRemote({
+    file
+  });
+}
+
+export async function deleteAuthenticatedUserAvatar({ currentUser }) {
+  if (!currentUser?.id) {
+    const authError = new Error("You must be logged in.");
+    authError.code = "AUTH_REQUIRED";
+    throw authError;
+  }
+
+  return deleteUserAvatarRemote();
+}
+
 export async function requestPhoneVerificationOtp() {
   return apiRequest("/auth/otp/send", {
     method: "POST"
@@ -191,12 +217,9 @@ export function getAuthenticatedUser() {
 
 export async function resolveAuthenticatedUser() {
   const currentUser = getCurrentUser();
+  const accessToken = getAccessToken();
 
-  if (currentUser?.id) {
-    return currentUser;
-  }
-
-  if (!getAccessToken()) {
+  if (!accessToken) {
     return null;
   }
 
@@ -211,6 +234,10 @@ export async function resolveAuthenticatedUser() {
       }
     });
   } catch (error) {
+    if (error?.code === "API_NETWORK_ERROR" && currentUser?.id) {
+      return currentUser;
+    }
+
     clearClientSessionState();
     return null;
   }

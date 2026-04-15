@@ -23,6 +23,7 @@ function parseLimit(value) {
 export const createPostHandler = asyncHandler(async (req, res) => {
   const post = await createPost({
     currentUserId: req.user._id,
+    clientRequestId: req.body.clientRequestId,
     content: req.body.content,
     image: req.body.image || req.body.imageUrl || "",
     voiceNote: req.body.voiceNote || null

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import mongoose from "mongoose";
 import { Comment } from "../models/Comment.js";
 import { Notification } from "../models/Notification.js";
@@ -23,6 +24,9 @@ import {
   validateReactionType
 } from "../utils/validators.js";
 
+const POST_DUPLICATE_WINDOW_MS = 4000;
+const MAX_CLIENT_REQUEST_ID_LENGTH = 128;
+
 function makeObjectIdError(field, message) {
   return new AppError(message, {
     statusCode: 400,
@@ -39,6 +43,28 @@ function assertObjectId(value, field) {
 
 function toIdString(value) {
   return value ? String(value) : "";
+}
+
+function normalizeClientRequestId(clientRequestId) {
+  const normalizedClientRequestId =
+    typeof clientRequestId === "string" ? clientRequestId.trim() : "";
+
+  if (!normalizedClientRequestId) {
+    return "";
+  }
+
+  if (normalizedClientRequestId.length > MAX_CLIENT_REQUEST_ID_LENGTH) {
+    throw new AppError(
+      `Post request IDs must be ${MAX_CLIENT_REQUEST_ID_LENGTH} characters or fewer.`,
+      {
+        statusCode: 400,
+        code: "POST_REQUEST_ID_INVALID",
+        field: "clientRequestId"
+      }
+    );
+  }
+
+  return normalizedClientRequestId;
 }
 
 function escapeRegex(value = "") {
@@ -61,6 +87,39 @@ function timestampsToFrontendShape(createdAt, updatedAt) {
   }
 
   return new Date(createdAt).getTime() === new Date(updatedAt).getTime() ? null : updatedAt;
+}
+
+function getVoiceNoteSignature(voiceNote = null) {
+  if (!voiceNote) {
+    return "";
+  }
+
+  const audioData =
+    voiceNote.audioData && Buffer.isBuffer(voiceNote.audioData) && voiceNote.audioData.length > 0
+      ? createHash("sha256").update(voiceNote.audioData).digest("hex")
+      : "";
+
+  return JSON.stringify({
+    audioData,
+    url: typeof voiceNote.url === "string" ? voiceNote.url : "",
+    storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey : "",
+    mimeType: typeof voiceNote.mimeType === "string" ? voiceNote.mimeType : "",
+    durationMs: Number(voiceNote.durationMs || 0),
+    size: Number(voiceNote.size || voiceNote.sizeBytes || 0),
+    waveform: Array.isArray(voiceNote.waveform) ? voiceNote.waveform : []
+  });
+}
+
+function getPostPayloadSignature({ content = "", imageUrl = "", voiceNote = null }) {
+  return JSON.stringify({
+    content,
+    imageUrl,
+    voiceNote: getVoiceNoteSignature(voiceNote)
+  });
+}
+
+function isSamePostPayload(post, safePost) {
+  return getPostPayloadSignature(post) === getPostPayloadSignature(safePost);
 }
 
 function serializeUserPreview(user) {
@@ -183,6 +242,31 @@ async function serializePosts(posts) {
 async function serializeSinglePost(post) {
   const [serializedPost] = await serializePosts([post]);
   return serializedPost || null;
+}
+
+async function findRecentDuplicatePost({
+  userId,
+  safePost
+}) {
+  const recentPosts = await Post.find({
+    userId,
+    status: "active",
+    createdAt: {
+      $gte: new Date(Date.now() - POST_DUPLICATE_WINDOW_MS)
+    }
+  })
+    .sort({ createdAt: -1 })
+    .limit(5);
+
+  return recentPosts.find((post) => isSamePostPayload(post, safePost)) || null;
+}
+
+function isClientRequestIdDuplicateError(error) {
+  return (
+    error?.code === 11000 &&
+    Boolean(error?.keyPattern?.userId) &&
+    Boolean(error?.keyPattern?.clientRequestId)
+  );
 }
 
 async function serializeComments(comments) {
@@ -375,27 +459,95 @@ async function syncReactionNotification({
   });
 }
 
-export async function createPost({ currentUserId, content = "", image = "", voiceNote = null }) {
+export async function createPost({
+  currentUserId,
+  clientRequestId = "",
+  content = "",
+  image = "",
+  voiceNote = null
+}) {
   const currentUser = await requireCurrentUser(currentUserId);
   const safePost = validatePostSubmission({
     content,
     voiceNote
   });
+  const safeImageUrl = validateImageUrl(image);
+  const normalizedVoiceNote = normalizeVoiceNoteInput(safePost.voiceNote);
+  const safeClientRequestId = normalizeClientRequestId(clientRequestId);
+  const safePostPayload = {
+    content: safePost.content,
+    imageUrl: safeImageUrl,
+    voiceNote: normalizedVoiceNote
+  };
 
-  if (hasVoiceNoteContent(safePost.voiceNote)) {
+  if (safeClientRequestId) {
+    const existingRequestPost = await Post.findOne({
+      userId: currentUser._id,
+      clientRequestId: safeClientRequestId
+    });
+
+    if (existingRequestPost) {
+      if (!isSamePostPayload(existingRequestPost, safePostPayload)) {
+        throw new AppError("That post request has already been used.", {
+          statusCode: 409,
+          code: "POST_REQUEST_ID_REUSED",
+          field: "clientRequestId"
+        });
+      }
+
+      return serializeSinglePost(existingRequestPost);
+    }
+  }
+
+  const duplicatePost = await findRecentDuplicatePost({
+    userId: currentUser._id,
+    safePost: safePostPayload
+  });
+
+  if (duplicatePost) {
+    return serializeSinglePost(duplicatePost);
+  }
+
+  if (normalizedVoiceNote) {
     await assertVoiceNoteCreationAllowed(currentUser._id);
   }
 
-  const post = await Post.create({
-    userId: currentUser._id,
-    content: safePost.content,
-    imageUrl: validateImageUrl(image),
-    voiceNote: normalizeVoiceNoteInput(safePost.voiceNote),
-    location: {
-      township: currentUser.location.township,
-      extension: currentUser.location.extension
+  let post;
+
+  try {
+    post = await Post.create({
+      userId: currentUser._id,
+      clientRequestId: safeClientRequestId || null,
+      content: safePost.content,
+      imageUrl: safeImageUrl,
+      voiceNote: normalizedVoiceNote,
+      location: {
+        township: currentUser.location.township,
+        extension: currentUser.location.extension
+      }
+    });
+  } catch (error) {
+    if (safeClientRequestId && isClientRequestIdDuplicateError(error)) {
+      const existingRequestPost = await Post.findOne({
+        userId: currentUser._id,
+        clientRequestId: safeClientRequestId
+      });
+
+      if (existingRequestPost) {
+        if (!isSamePostPayload(existingRequestPost, safePostPayload)) {
+          throw new AppError("That post request has already been used.", {
+            statusCode: 409,
+            code: "POST_REQUEST_ID_REUSED",
+            field: "clientRequestId"
+          });
+        }
+
+        return serializeSinglePost(existingRequestPost);
+      }
     }
-  });
+
+    throw error;
+  }
 
   publishToAll({
     type: "posts.updated",

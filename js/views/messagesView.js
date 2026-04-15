@@ -14,6 +14,7 @@ import {
   isUserBlocked,
   loadUserDirectory,
   setDirectMessagesEnabledRemote,
+  subscribeCurrentUserChanges,
   unblockUserRemote
 } from "../services/userService.js";
 import {
@@ -60,10 +61,14 @@ import {
   CHAT_BATCH_SIZE,
   DISCOVER_USERS_BATCH_SIZE,
   THREAD_MESSAGE_BATCH_SIZE,
-  createLoadMoreControl
+  createLoadMoreControl,
+  preserveElementScrollPosition
 } from "../utils/listBatching.js";
 
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
+const MESSAGE_REPLY_SWIPE_TRIGGER_PX = 72;
+const MESSAGE_REPLY_SWIPE_MAX_PX = 92;
+const MESSAGE_TARGET_HIGHLIGHT_MS = 1800;
 const messagesUiState = {
   visibleMessageCounts: new Map()
 };
@@ -90,15 +95,21 @@ export async function renderMessages(app, currentUser, payload = null) {
     className: `messages-layout${activeConversationRecord ? " messages-layout-thread-open" : ""}`
   });
 
-  const conversationListCard = createConversationListCard({
-    currentUser,
-    conversations,
-    activeConversationId
-  });
   const conversationPanel = createConversationPanel({
     currentUser,
     conversation: activeConversationRecord,
     editingMessageId
+  });
+  const conversationListCard = createConversationListCard({
+    currentUser,
+    conversations,
+    activeConversationId,
+    onDirectMessagesSettingChanged: (updatedUser) => {
+      Object.assign(currentUser, updatedUser);
+      conversationPanel.refresh({
+        currentUser
+      });
+    }
   });
 
   layout.append(conversationListCard.element, conversationPanel.element);
@@ -273,7 +284,12 @@ async function resolveActiveConversation(currentUserId, payload) {
   return null;
 }
 
-function createConversationListCard({ currentUser, conversations, activeConversationId }) {
+function createConversationListCard({
+  currentUser,
+  conversations,
+  activeConversationId,
+  onDirectMessagesSettingChanged = null
+}) {
   const card = createElement("section", {
     className: "profile-card messages-card messages-list-card"
   });
@@ -336,6 +352,7 @@ function createConversationListCard({ currentUser, conversations, activeConversa
   let visibleConversationCount = CHAT_BATCH_SIZE;
   let conversationsState = Array.isArray(conversations) ? conversations : [];
   let activeConversationIdState = activeConversationId;
+  let dmTogglePending = false;
   const selectedConversationIds = new Set();
 
   dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
@@ -577,7 +594,9 @@ function createConversationListCard({ currentUser, conversations, activeConversa
           className: "messages-load-more-row",
           onClick: () => {
             visibleConversationCount += CHAT_BATCH_SIZE;
-            renderList();
+            preserveElementScrollPosition(list, () => {
+              renderList();
+            });
           }
         })
       );
@@ -594,18 +613,28 @@ function createConversationListCard({ currentUser, conversations, activeConversa
 
   dmToggleInput.addEventListener("change", () => {
     (async () => {
+      const nextEnabled = dmToggleInput.checked;
+
+      if (dmTogglePending) {
+        dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
+        return;
+      }
+
       try {
+        dmTogglePending = true;
+        dmToggleInput.disabled = true;
         const updatedUser = await setDirectMessagesEnabledRemote({
-          enabled: dmToggleInput.checked
+          enabled: nextEnabled
         });
         currentUser.directMessagesEnabled = updatedUser.directMessagesEnabled;
-        void navigate(
-          "messages",
-          activeConversationId ? { conversationId: activeConversationId } : null
-        );
+        dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
+        onDirectMessagesSettingChanged?.(updatedUser);
       } catch (error) {
         dmToggleInput.checked = currentUser.directMessagesEnabled !== false;
         showToast(error.message || "Could not update direct messages.", "error");
+      } finally {
+        dmTogglePending = false;
+        dmToggleInput.disabled = false;
       }
     })();
   });
@@ -669,15 +698,22 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   }
 
   let conversationState = conversation;
+  let currentUserState = currentUser;
   let editingMessageIdState = editingMessageId;
+  let replyingToMessageIdState = "";
+  let isSending = false;
+  let pendingClientRequestId = "";
+  let focusedMessageTimeoutId = null;
   const otherUser = getConversationPartner(conversation, currentUser.id);
-  const availability = getDirectMessageAvailability({
-    senderUserId: currentUser.id,
-    recipientUserId: otherUser?.id || ""
-  });
+  const getAvailability = () =>
+    getDirectMessageAvailability({
+      senderUserId: currentUserState.id,
+      recipientUserId: otherUser?.id || ""
+    });
+  let availabilityState = getAvailability();
   const currentUserBlockedOther = otherUser
     ? isUserBlocked({
-        currentUserId: currentUser.id,
+        currentUserId: currentUserState.id,
         targetUserId: otherUser.id
       })
     : false;
@@ -725,7 +761,10 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   });
   const spotlightNote = createElement("p", {
     className: "messages-panel-note",
-    text: availability.allowed ? "Direct messages are synced to your account." : availability.message
+    text:
+      availabilityState.allowed
+        ? "Direct messages are synced to your account."
+        : availabilityState.message
   });
   const body = createElement("div", { className: "messages-panel-body" });
   const messages = createElement("div", {
@@ -734,6 +773,14 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   const composer = createElement("form", {
     className: "messages-composer"
   });
+  const replyComposer = createElement("div", {
+    className: "messages-reply-composer",
+    attributes: {
+      role: "status",
+      "aria-live": "polite"
+    }
+  });
+  replyComposer.hidden = true;
   const composerControls = createElement("div", {
     className: "messages-composer-controls"
   });
@@ -756,6 +803,15 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   });
   submitBtn.appendChild(createSendIcon());
   const baseInputPlaceholder = otherUser ? `Message @${otherUser.username}` : "Write a message";
+  const setComposerBusyState = (nextBusy) => {
+    isSending = Boolean(nextBusy);
+    composer.classList.toggle("messages-composer-busy", isSending);
+    composer.setAttribute("aria-busy", isSending ? "true" : "false");
+    submitBtn.classList.toggle("messages-send-btn-busy", isSending);
+    submitBtn.setAttribute("aria-busy", isSending ? "true" : "false");
+    voiceComposer?.setDisabled(isSending || !availabilityState.allowed);
+    syncComposerControls();
+  };
   const voiceComposer = voiceNoteFeatureStatus.supported
     ? createDmVoiceComposer({
         onBeforeRecord: () => {
@@ -770,18 +826,28 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
           showToast(message, "error");
         },
         onStateChange: ({ active, hasDraft, isRecording }) => {
+          if (!isSending) {
+            pendingClientRequestId = "";
+          }
+
           composer.classList.toggle("messages-composer-voice-active", active);
-          input.disabled = !availability.allowed || active;
-          input.placeholder = !availability.allowed
-            ? availability.message
+          input.disabled = isSending || !availabilityState.allowed || active;
+          input.placeholder = !availabilityState.allowed
+            ? availabilityState.message
             : isRecording
               ? "Recording voice note..."
               : hasDraft
                 ? "Voice note ready to send"
                 : baseInputPlaceholder;
           submitBtn.disabled =
-            !availability.allowed || isRecording || (!input.value.trim() && !hasDraft);
-          submitBtn.classList.toggle("messages-send-btn-voice", hasDraft && !isRecording);
+            isSending ||
+            !availabilityState.allowed ||
+            isRecording ||
+            (!input.value.trim() && !hasDraft);
+          submitBtn.classList.toggle(
+            "messages-send-btn-voice",
+            !isSending && hasDraft && !isRecording
+          );
         }
       })
     : null;
@@ -879,7 +945,147 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
     });
   });
 
-  const renderMessagesList = ({ preserveScrollPosition = false, stickToBottom = false } = {}) => {
+  const getMessageById = (messageId) =>
+    conversationState.messages.find((entry) => entry.id === messageId) || null;
+
+  const clearMessageHighlight = () => {
+    window.clearTimeout(focusedMessageTimeoutId);
+    focusedMessageTimeoutId = null;
+
+    messages.querySelectorAll(".messages-bubble-stack-targeted").forEach((node) => {
+      node.classList.remove("messages-bubble-stack-targeted");
+      node.removeAttribute("tabindex");
+    });
+  };
+
+  const highlightMessageElement = (targetMessageElement) => {
+    if (!targetMessageElement) {
+      return false;
+    }
+
+    clearMessageHighlight();
+    targetMessageElement.classList.add("messages-bubble-stack-targeted");
+    targetMessageElement.setAttribute("tabindex", "-1");
+    targetMessageElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+    targetMessageElement.focus({ preventScroll: true });
+    focusedMessageTimeoutId = window.setTimeout(() => {
+      targetMessageElement.classList.remove("messages-bubble-stack-targeted");
+      targetMessageElement.removeAttribute("tabindex");
+      focusedMessageTimeoutId = null;
+    }, MESSAGE_TARGET_HIGHLIGHT_MS);
+    return true;
+  };
+
+  const focusMessageById = (messageId) => {
+    if (!messageId) {
+      return false;
+    }
+
+    const visibleMessageCount =
+      messagesUiState.visibleMessageCounts.get(conversationState.id) || THREAD_MESSAGE_BATCH_SIZE;
+    const targetMessageIndex = conversationState.messages.findIndex(
+      (entry) => entry.id === messageId
+    );
+
+    if (targetMessageIndex === -1) {
+      return false;
+    }
+
+    const requiredVisibleMessageCount = conversationState.messages.length - targetMessageIndex;
+
+    if (requiredVisibleMessageCount > visibleMessageCount) {
+      messagesUiState.visibleMessageCounts.set(
+        conversationState.id,
+        requiredVisibleMessageCount
+      );
+      renderMessagesList({ focusMessageId: messageId });
+      return true;
+    }
+
+    const targetMessageElement = messages.querySelector(
+      `[data-message-id="${messageId}"]`
+    );
+
+    if (targetMessageElement) {
+      return highlightMessageElement(targetMessageElement);
+    }
+
+    renderMessagesList({ focusMessageId: messageId });
+    return true;
+  };
+
+  const syncReplyComposer = () => {
+    clearElement(replyComposer);
+    replyComposer.hidden = true;
+
+    if (!replyingToMessageIdState || editingMessageIdState) {
+      return;
+    }
+
+    const replyTargetMessage = getMessageById(replyingToMessageIdState);
+
+    if (!replyTargetMessage) {
+      replyingToMessageIdState = "";
+      return;
+    }
+
+    const shell = createElement("div", {
+      className: "messages-reply-composer-shell"
+    });
+    const copy = createElement("div", {
+      className: "messages-reply-composer-copy"
+    });
+    const label = createElement("span", {
+      className: "messages-reply-composer-label",
+      text: `Replying to ${getReplyMessageAuthorLabel({
+        message: replyTargetMessage,
+        currentUser,
+        otherUser
+      })}`
+    });
+    const dismissBtn = createElement("button", {
+      className: "messages-reply-composer-dismiss",
+      type: "button",
+      text: "Cancel"
+    });
+
+    copy.append(
+      label,
+      createReplyReference({
+        message: replyTargetMessage,
+        currentUser,
+        otherUser,
+        className: "messages-reply-reference-composer",
+        onSelect: () => {
+          focusMessageById(replyTargetMessage.id);
+        }
+      })
+    );
+    shell.append(copy, dismissBtn);
+    replyComposer.appendChild(shell);
+    replyComposer.hidden = false;
+
+    dismissBtn.addEventListener("click", () => {
+      replyingToMessageIdState = "";
+      if (!isSending) {
+        pendingClientRequestId = "";
+      }
+      syncReplyComposer();
+
+      if (!editingMessageIdState) {
+        input.focus({ preventScroll: true });
+      }
+    });
+  };
+
+  const renderMessagesList = ({
+    preserveScrollPosition = false,
+    stickToBottom = false,
+    focusMessageId = ""
+  } = {}) => {
     const previousScrollTop = messages.scrollTop;
     const previousScrollHeight = messages.scrollHeight;
 
@@ -927,24 +1133,41 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
             otherUser,
             conversationId: conversationState.id,
             message,
+            replyTargetMessage: getMessageById(message.replyToMessageId),
             seenUser: message.id === lastSeenOwnMessageId ? otherUser : null,
             isEditing: editingMessageIdState === message.id,
+            onReply: (messageId) => {
+              replyingToMessageIdState = messageId;
+              pendingClientRequestId = "";
+              syncReplyComposer();
+
+              if (!editingMessageIdState) {
+                input.focus({ preventScroll: true });
+              }
+            },
+            onReplyTargetSelect: (messageId) => {
+              focusMessageById(messageId);
+            },
             onStartEdit: (messageId) => {
               editingMessageIdState = messageId;
+              syncReplyComposer();
               renderMessagesList({ preserveScrollPosition: true });
             },
             onCancelEdit: () => {
               editingMessageIdState = "";
+              syncReplyComposer();
               renderMessagesList({ preserveScrollPosition: true });
             },
             onMessageUpdated: (nextConversation) => {
               editingMessageIdState = "";
               conversationState = nextConversation;
+              syncReplyComposer();
               renderMessagesList({ preserveScrollPosition: true });
             },
             onMessageDeleted: (nextConversation) => {
               editingMessageIdState = "";
               conversationState = nextConversation;
+              syncReplyComposer();
               renderMessagesList({ preserveScrollPosition: true });
             }
           })
@@ -953,6 +1176,13 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
     }
 
     window.requestAnimationFrame(() => {
+      if (focusMessageId) {
+        highlightMessageElement(
+          messages.querySelector(`[data-message-id="${focusMessageId}"]`)
+        );
+        return;
+      }
+
       if (preserveScrollPosition) {
         messages.scrollTop = messages.scrollHeight - previousScrollHeight + previousScrollTop;
         return;
@@ -965,6 +1195,8 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         });
       }
     });
+
+    syncReplyComposer();
   };
 
   const syncComposerControls = () => {
@@ -974,24 +1206,40 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
       isRecording: false
     };
 
-    input.disabled = !availability.allowed || voiceState.active;
-    input.placeholder = !availability.allowed
-      ? availability.message
+    input.disabled = isSending || !availabilityState.allowed || voiceState.active;
+    input.placeholder = !availabilityState.allowed
+      ? availabilityState.message
       : voiceState.isRecording
         ? "Recording voice note..."
         : voiceState.hasDraft
           ? "Voice note ready to send"
           : baseInputPlaceholder;
     submitBtn.disabled =
-      !availability.allowed || voiceState.isRecording || (!input.value.trim() && !voiceState.hasDraft);
+      isSending ||
+      !availabilityState.allowed ||
+      voiceState.isRecording ||
+      (!input.value.trim() && !voiceState.hasDraft);
     submitBtn.classList.toggle(
       "messages-send-btn-voice",
-      voiceState.hasDraft && !voiceState.isRecording
+      !isSending && voiceState.hasDraft && !voiceState.isRecording
     );
   };
 
+  const syncAvailabilityState = () => {
+    availabilityState = getAvailability();
+    spotlightNote.textContent = availabilityState.allowed
+      ? "Direct messages are synced to your account."
+      : availabilityState.message;
+
+    if (voiceComposer) {
+      voiceComposer.setDisabled(isSending || !availabilityState.allowed);
+    }
+
+    syncComposerControls();
+  };
+
   if (voiceComposer) {
-    voiceComposer.setDisabled(!availability.allowed);
+    voiceComposer.setDisabled(!availabilityState.allowed);
   }
   syncComposerControls();
 
@@ -1003,11 +1251,21 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   if (voiceComposer) {
     composer.append(voiceComposer.root);
   }
-  composer.append(composerControls);
+  composer.append(replyComposer, composerControls);
 
-  input.addEventListener("input", syncComposerControls);
+  input.addEventListener("input", () => {
+    if (!isSending) {
+      pendingClientRequestId = "";
+    }
+
+    syncComposerControls();
+  });
   composer.addEventListener("submit", async (event) => {
     event.preventDefault();
+
+    if (isSending) {
+      return;
+    }
 
     try {
       if (voiceComposer?.isRecording()) {
@@ -1020,8 +1278,15 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         throw new Error("Send text or a voice note, not both.");
       }
 
+      if (!pendingClientRequestId) {
+        pendingClientRequestId = crypto.randomUUID();
+      }
+
+      setComposerBusyState(true);
       const updatedConversation = await sendMessage({
         conversationId: conversationState.id,
+        clientRequestId: pendingClientRequestId,
+        replyToMessageId: replyingToMessageIdState,
         text: input.value,
         voiceNote: voiceNoteDraft
       });
@@ -1031,7 +1296,10 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
       }
 
       input.value = "";
+      pendingClientRequestId = "";
+      replyingToMessageIdState = "";
       conversationState = updatedConversation;
+      syncReplyComposer();
       syncComposerControls();
       renderMessagesList({ stickToBottom: true });
 
@@ -1045,7 +1313,13 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         ? getVoiceNoteDailyLimitMessage(error)
         : error.message || "Could not send your message.";
 
+      if (error?.code !== "API_NETWORK_ERROR" && error?.code !== "INTERNAL_SERVER_ERROR") {
+        pendingClientRequestId = "";
+      }
+
       showToast(message, "error");
+    } finally {
+      setComposerBusyState(false);
     }
   });
 
@@ -1061,7 +1335,29 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
 
   return {
     element: card,
-    refresh(nextConversation) {
+    refresh(nextConversationOrOptions = null) {
+      let nextConversation = nextConversationOrOptions;
+      let nextCurrentUser = currentUserState;
+
+      if (
+        nextConversationOrOptions &&
+        typeof nextConversationOrOptions === "object" &&
+        ("conversation" in nextConversationOrOptions ||
+          "currentUser" in nextConversationOrOptions)
+      ) {
+        nextConversation =
+          Object.prototype.hasOwnProperty.call(nextConversationOrOptions, "conversation")
+            ? nextConversationOrOptions.conversation
+            : conversationState;
+        nextCurrentUser =
+          Object.prototype.hasOwnProperty.call(nextConversationOrOptions, "currentUser")
+            ? nextConversationOrOptions.currentUser
+            : currentUserState;
+      }
+
+      currentUserState = nextCurrentUser || currentUserState;
+      syncAvailabilityState();
+
       if (!nextConversation || editingMessageIdState) {
         return;
       }
@@ -1074,6 +1370,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         : previousMessageCount;
 
       conversationState = nextConversation;
+      syncReplyComposer();
       renderMessagesList({
         preserveScrollPosition: !wasNearBottom,
         stickToBottom: wasNearBottom || nextMessageCount > previousMessageCount
@@ -1081,16 +1378,17 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
 
       const hasUnreadIncoming = conversationState.messages.some(
         (message) =>
-          message.senderId !== currentUser.id && !message.readBy.includes(currentUser.id)
+          message.senderId !== currentUserState.id &&
+          !message.readBy.includes(currentUserState.id)
       );
 
       if (hasUnreadIncoming) {
         void markConversationRead({
           conversationId: conversationState.id,
-          userId: currentUser.id
+          userId: currentUserState.id
         });
         void clearConversationNotifications({
-          userId: currentUser.id,
+          userId: currentUserState.id,
           conversationId: conversationState.id
         });
       }
@@ -1103,8 +1401,11 @@ function createMessageBubble({
   otherUser,
   conversationId,
   message,
+  replyTargetMessage = null,
   seenUser = null,
   isEditing = false,
+  onReply = () => {},
+  onReplyTargetSelect = () => {},
   onStartEdit = () => {},
   onCancelEdit = () => {},
   onMessageUpdated = () => {},
@@ -1114,15 +1415,30 @@ function createMessageBubble({
   const isVoiceMessage =
     Boolean(getVoiceNoteSource(message.voiceNote)) || isVoiceNotePendingSync(message.voiceNote);
   const stack = createElement("div", {
-    className: `messages-bubble-stack${isOwnMessage ? " messages-bubble-stack-own" : ""}`
+    className: `messages-bubble-stack${isOwnMessage ? " messages-bubble-stack-own" : ""}`,
+    attributes: {
+      "data-message-id": message.id
+    }
   });
   const bubble = createElement("div", {
     className: `messages-bubble${isOwnMessage ? " messages-bubble-own" : ""}${
       message.deletedForEveryone ? " messages-bubble-deleted" : ""
     }${isVoiceMessage ? " messages-bubble-voice" : ""}${
       isVoiceMessage && isOwnMessage ? " messages-bubble-voice-own" : ""
+    }${!message.deletedForEveryone ? " messages-bubble-swipeable" : ""}`
+  });
+  const swipeIndicator = createElement("div", {
+    className: `messages-swipe-reply-indicator${
+      isOwnMessage ? " messages-swipe-reply-indicator-own" : ""
     }`
   });
+  swipeIndicator.append(
+    createReplyIcon(),
+    createElement("span", {
+      className: "messages-swipe-reply-label",
+      text: "Reply"
+    })
+  );
 
   const createOwnMenuButton = () => {
     const menuBtn = createElement("button", {
@@ -1136,7 +1452,14 @@ function createMessageBubble({
 
     menuBtn.appendChild(createDotsIcon());
     menuBtn.addEventListener("click", () => {
-      const actions = [];
+      const actions = [
+        {
+          label: "Reply",
+          onSelect: () => {
+            onReply(message.id);
+          }
+        }
+      ];
 
       if (
         canEditMessage({ message, userId: currentUser.id }) &&
@@ -1203,6 +1526,8 @@ function createMessageBubble({
     return stack;
   }
 
+  stack.appendChild(swipeIndicator);
+
   const header = createElement("div", { className: "messages-bubble-header" });
   const meta = createElement("span", {
     className: "messages-bubble-meta",
@@ -1219,6 +1544,22 @@ function createMessageBubble({
 
   if (!isVoiceMessage) {
     bubble.appendChild(header);
+  }
+
+  if (!message.deletedForEveryone && message.replyToMessageId) {
+    bubble.appendChild(
+      createReplyReference({
+        message: replyTargetMessage,
+        currentUser,
+        otherUser,
+        className: "messages-reply-reference-bubble",
+        onSelect: () => {
+          if (message.replyToMessageId) {
+            onReplyTargetSelect(message.replyToMessageId);
+          }
+        }
+      })
+    );
   }
 
   if (message.deletedForEveryone) {
@@ -1266,6 +1607,13 @@ function createMessageBubble({
   }
 
   stack.appendChild(bubble);
+  enableMessageSwipeReply({
+    stack,
+    swipeSurface: bubble,
+    messageId: message.id,
+    isOwnMessage,
+    onReply
+  });
 
   if (isOwnMessage && seenUser) {
     const seenIndicator = createElement("div", {
@@ -1287,6 +1635,179 @@ function createMessageBubble({
   }
 
   return stack;
+}
+
+function createReplyReference({
+  message,
+  currentUser,
+  otherUser,
+  className = "",
+  onSelect = null
+}) {
+  const isInteractive = message?.id && typeof onSelect === "function";
+  const reference = createElement(isInteractive ? "button" : "div", {
+    className: `messages-reply-reference${
+      isInteractive ? " messages-reply-reference-button" : ""
+    }${className ? ` ${className}` : ""}`,
+    ...(isInteractive
+      ? {
+          type: "button",
+          attributes: {
+            "aria-label": "Open replied message"
+          }
+        }
+      : {})
+  });
+  const author = createElement("span", {
+    className: "messages-reply-reference-author",
+    text: getReplyMessageAuthorLabel({
+      message,
+      currentUser,
+      otherUser
+    })
+  });
+  const excerpt = createElement("p", {
+    className: "messages-reply-reference-text",
+    text: getReplyMessageExcerpt({
+      message,
+      currentUser,
+      otherUser
+    })
+  });
+
+  if (isInteractive) {
+    reference.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onSelect(message.id);
+    });
+  }
+
+  reference.append(author, excerpt);
+  return reference;
+}
+
+function enableMessageSwipeReply({
+  stack,
+  swipeSurface,
+  messageId,
+  isOwnMessage,
+  onReply = () => {}
+}) {
+  if (!stack || !swipeSurface || !messageId || typeof onReply !== "function") {
+    return;
+  }
+
+  const swipeDirection = isOwnMessage ? -1 : 1;
+  let activePointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let trackingSwipe = false;
+  let horizontalSwipeLocked = false;
+
+  const resetSwipe = () => {
+    stack.style.setProperty("--messages-swipe-offset", "0px");
+    stack.classList.remove("messages-bubble-stack-swiping");
+    stack.classList.remove("messages-bubble-stack-ready");
+
+    if (
+      activePointerId !== null &&
+      typeof swipeSurface.hasPointerCapture === "function" &&
+      swipeSurface.hasPointerCapture(activePointerId)
+    ) {
+      swipeSurface.releasePointerCapture(activePointerId);
+    }
+
+    activePointerId = null;
+    startX = 0;
+    startY = 0;
+    trackingSwipe = false;
+    horizontalSwipeLocked = false;
+  };
+
+  const shouldIgnoreSwipeTarget = (target) =>
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        "button, input, textarea, select, a, [role='button'], [role='link'], .voice-note-meter-seekable"
+      )
+    );
+
+  swipeSurface.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+
+    if (shouldIgnoreSwipeTarget(event.target)) {
+      return;
+    }
+
+    activePointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    trackingSwipe = true;
+    horizontalSwipeLocked = false;
+    stack.style.setProperty("--messages-swipe-offset", "0px");
+    swipeSurface.setPointerCapture?.(event.pointerId);
+  });
+
+  swipeSurface.addEventListener("pointermove", (event) => {
+    if (!trackingSwipe || event.pointerId !== activePointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - startX;
+    const deltaY = event.clientY - startY;
+
+    if (!horizontalSwipeLocked) {
+      if (Math.abs(deltaY) > 14 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        resetSwipe();
+        return;
+      }
+
+      if (Math.abs(deltaX) < 10 || Math.abs(deltaX) < Math.abs(deltaY)) {
+        return;
+      }
+
+      horizontalSwipeLocked = true;
+    }
+
+    const directedDelta = deltaX * swipeDirection;
+
+    if (directedDelta <= 0) {
+      stack.style.setProperty("--messages-swipe-offset", "0px");
+      stack.classList.remove("messages-bubble-stack-ready");
+      return;
+    }
+
+    event.preventDefault();
+    const offset = Math.min(MESSAGE_REPLY_SWIPE_MAX_PX, directedDelta) * swipeDirection;
+    stack.style.setProperty("--messages-swipe-offset", `${offset}px`);
+    stack.classList.add("messages-bubble-stack-swiping");
+    stack.classList.toggle(
+      "messages-bubble-stack-ready",
+      directedDelta >= MESSAGE_REPLY_SWIPE_TRIGGER_PX
+    );
+  });
+
+  const finishSwipe = (event) => {
+    if (!trackingSwipe || event.pointerId !== activePointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - startX;
+    const directedDelta = deltaX * swipeDirection;
+    const shouldReply = directedDelta >= MESSAGE_REPLY_SWIPE_TRIGGER_PX;
+
+    resetSwipe();
+
+    if (shouldReply) {
+      onReply(messageId);
+    }
+  };
+
+  swipeSurface.addEventListener("pointerup", finishSwipe);
+  swipeSurface.addEventListener("pointercancel", resetSwipe);
+  swipeSurface.addEventListener("lostpointercapture", resetSwipe);
 }
 
 function createMessageEditForm({ conversationId, message, onCancel = () => {}, onSave = () => {} }) {
@@ -2246,7 +2767,9 @@ function createDiscoverPeoplePanel(currentUser) {
           className: "messages-load-more-row",
           onClick: () => {
             visibleUserCount += DISCOVER_USERS_BATCH_SIZE;
-            renderResults();
+            preserveElementScrollPosition(results, () => {
+              renderResults();
+            });
           }
         })
       );
@@ -2265,6 +2788,10 @@ function createDiscoverPeoplePanel(currentUser) {
     visibleUserCount = DISCOVER_USERS_BATCH_SIZE;
     renderResults();
   });
+  const unsubscribeCurrentUserChanges = subscribeCurrentUserChanges(() => {
+    renderResults();
+  });
+  registerViewCleanup(unsubscribeCurrentUserChanges);
 
   renderResults();
   return panel;
@@ -2301,6 +2828,44 @@ function getConversationPreviewText({ currentUser, message, otherUser }) {
   return message.senderId === currentUser.id
     ? "You sent a message."
     : `${otherUser?.username || "Someone"} sent you a message.`;
+}
+
+function getReplyMessageAuthorLabel({ message, currentUser, otherUser }) {
+  if (!message) {
+    return "Original message";
+  }
+
+  return message.senderId === currentUser.id ? "You" : otherUser?.username || "Someone";
+}
+
+function getReplyMessageExcerpt({ message, currentUser, otherUser }) {
+  if (!message) {
+    return "Original message unavailable.";
+  }
+
+  const authorLabel = getReplyMessageAuthorLabel({
+    message,
+    currentUser,
+    otherUser
+  });
+
+  if (message.deletedForEveryone) {
+    return `${authorLabel} deleted a message.`;
+  }
+
+  if (getVoiceNoteSource(message.voiceNote)) {
+    return `${authorLabel} sent a voice note.`;
+  }
+
+  if (isVoiceNotePendingSync(message.voiceNote)) {
+    return `${authorLabel} sent a voice note that is reloading.`;
+  }
+
+  const normalizedText = String(message.text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalizedText || "Message unavailable.";
 }
 
 function getLastSeenOwnMessageId({ conversation, currentUserId, otherUserId }) {
@@ -2439,6 +3004,24 @@ function createSendIcon() {
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("fill", "currentColor");
   path.setAttribute("d", "M4.9 4.86a1 1 0 0 1 1.09-.2l12.6 5.67a.92.92 0 0 1 0 1.68L5.99 17.68a1 1 0 0 1-1.38-1.13l1.47-4.93a.9.9 0 0 1 .86-.64h5.4a.75.75 0 0 1 0 1.5H7.5l-.8 2.67 9.73-4.39L6.7 6.37l.8 2.67h4.84a.75.75 0 0 1 0 1.5h-5.4a.9.9 0 0 1-.86-.64L4.61 5.97a1 1 0 0 1 .29-1.11Z");
+  svg.appendChild(path);
+
+  return svg;
+}
+
+function createReplyIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("messages-reply-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("d", "M9 7 4 12l5 5M4.5 12H15a5 5 0 0 1 5 5");
   svg.appendChild(path);
 
   return svg;

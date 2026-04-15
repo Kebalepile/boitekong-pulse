@@ -2,6 +2,10 @@ import bcrypt from "bcryptjs";
 import { Notification } from "../models/Notification.js";
 import { User } from "../models/User.js";
 import { AppError } from "../utils/appError.js";
+import {
+  deleteStoredAvatar,
+  storeAvatarUpload
+} from "../utils/avatarUploads.js";
 import { normalizeDirectMessageEncryptionRecord } from "../utils/directMessageEncryption.js";
 import { publishToUser } from "./realtimeService.js";
 import {
@@ -166,8 +170,11 @@ export async function getFollowingUsers(userId, { limit } = {}) {
 }
 
 export async function updateUserProfile(userId, payload = {}) {
-  const user = await requireUser(userId, { includePasswordHash: true });
+  const wantsPasswordChange =
+    String(payload.newPassword ?? "").trim() || String(payload.confirmNewPassword ?? "").trim();
+  const user = await requireUser(userId, { includePasswordHash: Boolean(wantsPasswordChange) });
   const previousPhoneNumber = user.phoneNumber;
+  const previousAvatarUrl = user.avatarUrl || "";
 
   const safeUsername =
     payload.username === undefined ? user.username : validateUsername(payload.username);
@@ -188,15 +195,21 @@ export async function updateUserProfile(userId, payload = {}) {
       ? user.avatarUrl || ""
       : normalizeAvatarUrl(payload.avatarUrl);
 
+  const usernameChanged = safeUsername.toLowerCase() !== user.usernameLower;
+  const phoneNumberChanged = safePhoneNumber !== previousPhoneNumber;
   const [usernameOwner, phoneOwner] = await Promise.all([
-    User.findOne({
-      usernameLower: safeUsername.toLowerCase(),
-      _id: { $ne: user._id }
-    }),
-    User.findOne({
-      phoneNumber: safePhoneNumber,
-      _id: { $ne: user._id }
-    })
+    usernameChanged
+      ? User.findOne({
+          usernameLower: safeUsername.toLowerCase(),
+          _id: { $ne: user._id }
+        })
+      : null,
+    phoneNumberChanged
+      ? User.findOne({
+          phoneNumber: safePhoneNumber,
+          _id: { $ne: user._id }
+        })
+      : null
   ]);
 
   if (usernameOwner) {
@@ -214,9 +227,6 @@ export async function updateUserProfile(userId, payload = {}) {
       field: "phoneNumber"
     });
   }
-
-  const wantsPasswordChange =
-    String(payload.newPassword ?? "").trim() || String(payload.confirmNewPassword ?? "").trim();
 
   if (wantsPasswordChange) {
     const currentPassword = validateCurrentPassword(payload.currentPassword);
@@ -250,6 +260,49 @@ export async function updateUserProfile(userId, payload = {}) {
   };
 
   await user.save();
+
+  if (previousAvatarUrl && previousAvatarUrl !== safeAvatarUrl) {
+    await deleteStoredAvatar(previousAvatarUrl);
+  }
+
+  return serializeUser(user);
+}
+
+export async function updateUserAvatar(userId, { fileBuffer, mimeType } = {}) {
+  const user = await requireUser(userId);
+  const previousAvatarUrl = user.avatarUrl || "";
+  const nextAvatarUrl = await storeAvatarUpload({
+    userId: user._id,
+    fileBuffer,
+    mimeType
+  });
+
+  try {
+    user.avatarUrl = nextAvatarUrl;
+    await user.save();
+  } catch (error) {
+    await deleteStoredAvatar(nextAvatarUrl);
+    throw error;
+  }
+
+  if (previousAvatarUrl && previousAvatarUrl !== nextAvatarUrl) {
+    await deleteStoredAvatar(previousAvatarUrl);
+  }
+
+  return serializeUser(user);
+}
+
+export async function deleteUserAvatar(userId) {
+  const user = await requireUser(userId);
+  const previousAvatarUrl = user.avatarUrl || "";
+
+  if (!previousAvatarUrl) {
+    return serializeUser(user);
+  }
+
+  user.avatarUrl = "";
+  await user.save();
+  await deleteStoredAvatar(previousAvatarUrl);
 
   return serializeUser(user);
 }

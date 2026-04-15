@@ -19,6 +19,7 @@ import {
 } from "../utils/validators.js";
 import {
   getVoiceNoteFeatureStatus,
+  serializeVoiceNoteForTransport,
   startVoiceNoteRecording,
   formatVoiceNoteDuration,
   MAX_VOICE_NOTE_DURATION_MS,
@@ -76,7 +77,7 @@ export function renderCreatePost(app, currentUser) {
   [
     "Text posts stay focused on the update itself.",
     "Add one optimized image to give extra context.",
-    "Voice-note posts are capped at 1 minute.",
+    "Voice-note posts can include one photo and are capped at 1 minute.",
     "Keep posts clear enough for neighbors to act on."
   ].forEach((tip) => {
     tipsList.appendChild(createElement("li", { text: tip }));
@@ -98,7 +99,7 @@ export function renderCreatePost(app, currentUser) {
   });
   const formText = createElement("p", {
     className: "section-copy",
-    text: "Choose the format that best fits what you want to share. Text updates can include one photo."
+    text: "Choose the format that best fits what you want to share. Text updates and voice notes can include one photo."
   });
 
   const form = createElement("form", {
@@ -110,7 +111,7 @@ export function renderCreatePost(app, currentUser) {
   const textModeBtn = createElement("button", {
     className: "secondary-btn create-post-mode-btn create-post-mode-btn-active",
     type: "button",
-    text: "Text update"
+    text: "Text"
   });
   const voiceModeBtn = createElement("button", {
     className: `secondary-btn create-post-mode-btn${
@@ -143,7 +144,6 @@ export function renderCreatePost(app, currentUser) {
   const imageField = createPostImageField({
     form,
     inputId: "post-image",
-    labelText: "Photo",
     titleText: "Add a post image"
   });
   const voiceComposer = voiceNoteFeatureStatus.supported
@@ -152,25 +152,33 @@ export function renderCreatePost(app, currentUser) {
       })
     : null;
   const voiceIntro = createElement("div", { className: "create-post-voice-intro" });
+  const voiceHeader = createElement("div", { className: "create-post-voice-header" });
   const voiceTitle = createElement("h3", {
     className: "create-post-voice-title",
     text: "Post a voice note"
   });
+  const voiceMediaSlot = createElement("div", {
+    className: "create-post-voice-media-slot"
+  });
   const voiceCopy = createElement("p", {
     className: "create-post-voice-copy",
     text: voiceNoteFeatureStatus.supported
-      ? "Tap the mic, record your update, review it, then publish it to the feed."
+      ? "Tap the mic, record your update, optionally add one photo, review it, then publish it to the feed."
       : voiceNoteFeatureStatus.message
   });
+  const voicePreviewSlot = createElement("div", {
+    className: "create-post-voice-preview-slot"
+  });
 
-  voiceIntro.append(voiceTitle, voiceCopy);
+  voiceHeader.append(voiceTitle, voiceMediaSlot);
+  voiceIntro.append(voiceHeader, voiceCopy, voicePreviewSlot);
   voicePanel.appendChild(voiceIntro);
 
   if (voiceComposer) {
     voicePanel.appendChild(voiceComposer.root);
   }
 
-  textPanel.append(contentField.wrapper, imageField.wrapper);
+  textPanel.append(contentField.wrapper);
 
   const actions = createElement("div", { className: "form-actions create-post-actions" });
   const cancelBtn = createElement("button", {
@@ -180,7 +188,7 @@ export function renderCreatePost(app, currentUser) {
   });
   const submitBtn = createElement("button", {
     className: "primary-btn",
-    text: "Publish post",
+    text: "Publish",
     type: "submit"
   });
 
@@ -188,14 +196,24 @@ export function renderCreatePost(app, currentUser) {
   let isSubmitting = false;
   let trackedDisabledStates = new Map();
   let activeLoadingOverlay = null;
+  let pendingClientRequestId = "";
+  let pendingSubmissionSignature = "";
+
+  const getPendingSubmissionSignature = ({ content = "", image = "", voiceNote = null }) =>
+    JSON.stringify({
+      mode: submissionMode,
+      content,
+      image,
+      voiceNote: serializeVoiceNoteForTransport(voiceNote)
+    });
 
   const syncSubmitButtonLabel = () => {
     if (isSubmitting) {
-      submitBtn.textContent = submissionMode === "voice" ? "Publishing..." : "Posting...";
+      submitBtn.textContent = "Publishing...";
       return;
     }
 
-    submitBtn.textContent = submissionMode === "voice" ? "Publish voice note" : "Publish post";
+    submitBtn.textContent = "Publish";
   };
 
   const setSubmissionBusyState = (nextBusy) => {
@@ -226,6 +244,7 @@ export function renderCreatePost(app, currentUser) {
   const updateMode = (nextMode) => {
     submissionMode = nextMode;
     const isTextMode = nextMode === "text";
+    const imageControl = imageField.control || imageField.wrapper;
 
     textModeBtn.className = isTextMode
       ? "secondary-btn create-post-mode-btn create-post-mode-btn-active"
@@ -239,6 +258,19 @@ export function renderCreatePost(app, currentUser) {
     textPanel.classList.toggle("create-post-mode-panel-active", isTextMode);
     voicePanel.classList.toggle("create-post-mode-panel-active", !isTextMode);
     contentField.input.required = isTextMode;
+
+    if (isTextMode) {
+      contentField.mediaSlot.replaceChildren(imageControl);
+      contentField.previewSlot.replaceChildren(imageField.wrapper);
+      voiceMediaSlot.replaceChildren();
+      voicePreviewSlot.replaceChildren();
+    } else {
+      voiceMediaSlot.replaceChildren(imageControl);
+      voicePreviewSlot.replaceChildren(imageField.wrapper);
+      contentField.mediaSlot.replaceChildren();
+      contentField.previewSlot.replaceChildren();
+    }
+
     syncSubmitButtonLabel();
 
     if (isTextMode && voiceComposer) {
@@ -290,7 +322,7 @@ export function renderCreatePost(app, currentUser) {
         throw new Error("Stop the voice note recording before publishing.");
       }
 
-      if (submissionMode === "text" && imageField.isProcessing()) {
+      if (imageField.isProcessing()) {
         const pendingImageError = new Error("Please wait for the image to finish optimizing.");
         pendingImageError.field = "image";
         throw pendingImageError;
@@ -306,6 +338,17 @@ export function renderCreatePost(app, currentUser) {
               content: contentField.input.value,
               voiceNote: null
             });
+      const postImage = imageField.getValue();
+      const nextSubmissionSignature = getPendingSubmissionSignature({
+        content: postPayload.content,
+        image: postImage,
+        voiceNote: postPayload.voiceNote
+      });
+
+      if (!pendingClientRequestId || pendingSubmissionSignature !== nextSubmissionSignature) {
+        pendingClientRequestId = crypto.randomUUID();
+        pendingSubmissionSignature = nextSubmissionSignature;
+      }
 
       setSubmissionBusyState(true);
       activeLoadingOverlay = showLoadingOverlay({
@@ -313,18 +356,19 @@ export function renderCreatePost(app, currentUser) {
       });
 
       await createAndStorePost({
+        clientRequestId: pendingClientRequestId,
         content: postPayload.content,
         voiceNote: postPayload.voiceNote,
-        image: submissionMode === "text" ? imageField.getValue() : ""
+        image: postImage
       });
 
       if (voiceComposer) {
         voiceComposer.clear();
       }
 
-      imageField.clear({
-        statusText: "No image selected."
-      });
+      imageField.clear();
+      pendingClientRequestId = "";
+      pendingSubmissionSignature = "";
 
       showToast("Your update is live in the feed.", "success", {
         variant: "post-success",
@@ -332,6 +376,11 @@ export function renderCreatePost(app, currentUser) {
       });
       await navigate("feed");
     } catch (error) {
+      if (error?.code !== "API_NETWORK_ERROR" && error?.code !== "INTERNAL_SERVER_ERROR") {
+        pendingClientRequestId = "";
+        pendingSubmissionSignature = "";
+      }
+
       handleCreatePostError(error, submissionMode);
     } finally {
       activeLoadingOverlay?.close();
@@ -358,6 +407,15 @@ function createTextAreaField({ labelText, inputId, placeholder, value }) {
     className: "field-helper",
     text: "Maximum 1000 characters."
   });
+  const metaRow = createElement("div", {
+    className: "create-post-text-meta-row"
+  });
+  const mediaSlot = createElement("div", {
+    className: "create-post-text-media-slot"
+  });
+  const previewSlot = createElement("div", {
+    className: "create-post-text-preview-slot"
+  });
   const error = createFieldError(inputId);
 
   topRow.append(label, counter);
@@ -368,13 +426,16 @@ function createTextAreaField({ labelText, inputId, placeholder, value }) {
   textarea.maxLength = MAX_POST_CONTENT_LENGTH;
   textarea.value = value;
 
-  wrapper.append(topRow, textarea, helper, error);
+  metaRow.append(helper, mediaSlot);
+  wrapper.append(topRow, textarea, metaRow, previewSlot, error);
 
   return {
     wrapper,
     input: textarea,
     counter,
-    error
+    error,
+    mediaSlot,
+    previewSlot
   };
 }
 

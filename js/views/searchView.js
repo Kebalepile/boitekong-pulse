@@ -13,7 +13,11 @@ import {
 import { createPostCard } from "../components/postCard.js";
 import { findUserById, getUsers } from "../services/userService.js";
 import { createAvatarElement } from "../utils/avatar.js";
-import { SEARCH_BATCH_SIZE, createLoadMoreControl } from "../utils/listBatching.js";
+import {
+  SEARCH_BATCH_SIZE,
+  createLoadMoreControl,
+  preservePageScrollPosition
+} from "../utils/listBatching.js";
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
 import { showToast } from "../components/toast.js";
 
@@ -131,7 +135,9 @@ export async function renderSearch(app, currentUser, payload = null) {
         visibleCount: visibleUserCount,
         onLoadMore: () => {
           visibleUserCount += SEARCH_BATCH_SIZE;
-          runSearch();
+          preservePageScrollPosition(() => {
+            runSearch();
+          });
         }
       });
       return;
@@ -175,7 +181,9 @@ export async function renderSearch(app, currentUser, payload = null) {
       visibleCount: visiblePostCount,
       onLoadMore: () => {
         visiblePostCount += SEARCH_BATCH_SIZE;
-        renderCurrentPostResults();
+        preservePageScrollPosition(() => {
+          renderCurrentPostResults();
+        });
       }
     });
   }

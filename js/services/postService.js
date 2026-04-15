@@ -13,6 +13,8 @@ import {
 } from "../utils/validators.js";
 
 const REACTION_KEYS = ["like", "meh", "dislike"];
+const MAX_PERSISTED_POSTS = 75;
+const STORAGE_POST_FALLBACK_SIZES = [MAX_PERSISTED_POSTS, 50, 30, 15, 5];
 const postListeners = new Set();
 let postsCache = null;
 
@@ -144,9 +146,24 @@ function sanitizeVoiceNoteForStorage(voiceNote) {
 }
 
 function sanitizeCommentRecordForStorage(comment = {}) {
+  const safeCommentAuthor = sanitizeUserPreviewForStorage(comment.author);
+
   return {
-    ...comment,
+    id: typeof comment.id === "string" ? comment.id : "",
+    postId: typeof comment.postId === "string" ? comment.postId : "",
+    userId: typeof comment.userId === "string" ? comment.userId : "",
+    parentId: typeof comment.parentId === "string" ? comment.parentId : null,
+    content: typeof comment.content === "string" ? comment.content : "",
+    reactions: createReactionRecord(comment.reactions),
     voiceNote: sanitizeVoiceNoteForStorage(comment.voiceNote)
+      ,
+    createdAt:
+      typeof comment.createdAt === "string" && comment.createdAt
+        ? comment.createdAt
+        : new Date().toISOString(),
+    updatedAt:
+      typeof comment.updatedAt === "string" && comment.updatedAt ? comment.updatedAt : null,
+    ...(safeCommentAuthor ? { author: safeCommentAuthor } : {})
   };
 }
 
@@ -155,22 +172,92 @@ function sanitizePostImageForStorage(image = "") {
   return /^https?:\/\//i.test(normalizedImage) ? normalizedImage : "";
 }
 
+function sanitizeUserPreviewForStorage(user = null) {
+  if (!user || typeof user !== "object") {
+    return null;
+  }
+
+  const safeAvatarUrl = sanitizePostImageForStorage(user.avatarDataUrl || user.avatarUrl || "");
+  const safeUser = {
+    id: typeof user.id === "string" ? user.id : "",
+    username: typeof user.username === "string" ? user.username : "",
+    avatarUrl: safeAvatarUrl,
+    avatarDataUrl: safeAvatarUrl,
+    location: {
+      township: typeof user.location?.township === "string" ? user.location.township : "",
+      extension: typeof user.location?.extension === "string" ? user.location.extension : ""
+    }
+  };
+
+  return safeUser.id || safeUser.username ? safeUser : null;
+}
+
 function sanitizePostRecordForStorage(post = {}) {
   const sanitizedImage = sanitizePostImageForStorage(post.imageUrl || post.image || "");
+  const safePostAuthor = sanitizeUserPreviewForStorage(post.author);
 
   return {
-    ...post,
+    id: typeof post.id === "string" ? post.id : "",
+    userId: typeof post.userId === "string" ? post.userId : "",
+    content: typeof post.content === "string" ? post.content : "",
     image: sanitizedImage,
     imageUrl: sanitizedImage,
+    location: {
+      township: typeof post.location?.township === "string" ? post.location.township : "",
+      extension: typeof post.location?.extension === "string" ? post.location.extension : ""
+    },
     voiceNote: sanitizeVoiceNoteForStorage(post.voiceNote),
+    reactions: createReactionRecord(post.reactions),
     comments: Array.isArray(post.comments)
       ? post.comments.map((comment) => sanitizeCommentRecordForStorage(comment))
-      : []
+      : [],
+    commentCount: Number.isFinite(post.commentCount)
+      ? Number(post.commentCount)
+      : Array.isArray(post.comments)
+        ? post.comments.length
+        : 0,
+    createdAt:
+      typeof post.createdAt === "string" && post.createdAt
+        ? post.createdAt
+        : new Date().toISOString(),
+    updatedAt:
+      typeof post.updatedAt === "string" && post.updatedAt ? post.updatedAt : null,
+    ...(safePostAuthor ? { author: safePostAuthor } : {})
   };
 }
 
 function sanitizePostsForStorage(posts = []) {
   return Array.isArray(posts) ? posts.map((post) => sanitizePostRecordForStorage(post)) : [];
+}
+
+function getPostStorageAttemptSizes(postCount) {
+  if (postCount <= 0) {
+    return [0];
+  }
+
+  return Array.from(
+    new Set(
+      STORAGE_POST_FALLBACK_SIZES.map((size) => Math.min(size, postCount)).filter(
+        (size) => Number.isInteger(size) && size >= 0
+      )
+    )
+  );
+}
+
+function persistPostsSnapshot(posts = []) {
+  const normalizedPosts = sortPosts(normalizePostRecords(posts));
+  const attemptSizes = getPostStorageAttemptSizes(normalizedPosts.length);
+
+  for (const attemptSize of attemptSizes) {
+    const snapshot = sanitizePostsForStorage(normalizedPosts.slice(0, attemptSize));
+
+    if (storage.set(STORAGE_KEYS.POSTS, snapshot)) {
+      return true;
+    }
+  }
+
+  storage.remove(STORAGE_KEYS.POSTS);
+  return false;
 }
 
 function sortPosts(posts = []) {
@@ -217,7 +304,7 @@ function saveNormalizedPosts(posts) {
   }
 
   postsCache = nextPosts;
-  storage.set(STORAGE_KEYS.POSTS, sanitizePostsForStorage(nextPosts));
+  persistPostsSnapshot(nextPosts);
   emitPostChange(nextPosts);
   return nextPosts;
 }
@@ -368,7 +455,12 @@ export async function searchPostsRemote(query, { limit } = {}) {
   return posts;
 }
 
-export async function createAndStorePost({ content = "", image = "", voiceNote = null }) {
+export async function createAndStorePost({
+  content = "",
+  image = "",
+  voiceNote = null,
+  clientRequestId = ""
+}) {
   const safePost = validatePostSubmission({
     content,
     voiceNote
@@ -376,6 +468,7 @@ export async function createAndStorePost({ content = "", image = "", voiceNote =
   const response = await apiRequest("/posts", {
     method: "POST",
     body: {
+      clientRequestId,
       content: safePost.content,
       image,
       voiceNote: serializeVoiceNoteForTransport(safePost.voiceNote)

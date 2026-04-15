@@ -62,24 +62,6 @@ export async function renderEditPost(app, currentUser, payload) {
     return;
   }
 
-  const infoCard = createElement("section", {
-    className: "profile-card editor-card editor-brief-card"
-  });
-  const infoEyebrow = createElement("p", {
-    className: "section-eyebrow",
-    text: "Refine your message"
-  });
-  const infoTitle = createElement("h2", {
-    className: "section-title",
-    text: "Edit your post"
-  });
-  const infoText = createElement("p", {
-    className: "section-copy",
-    text: "Update the wording or replace the photo. Your original post metadata stays attached to the post."
-  });
-
-  infoCard.append(infoEyebrow, infoTitle, infoText);
-
   const formCard = createElement("section", {
     className: "profile-card editor-card editor-form-card"
   });
@@ -106,10 +88,13 @@ export async function renderEditPost(app, currentUser, payload) {
   const imageField = createPostImageField({
     form,
     inputId: "edit-post-image",
-    labelText: "Photo",
     titleText: "Update post image",
     initialImage: post.image || post.imageUrl || ""
   });
+  const imageControl = imageField.control || imageField.wrapper;
+
+  contentField.mediaSlot.replaceChildren(imageControl);
+  contentField.previewSlot.replaceChildren(imageField.wrapper);
 
   const actions = createElement("div", { className: "form-actions" });
 
@@ -128,10 +113,10 @@ export async function renderEditPost(app, currentUser, payload) {
   cancelBtn.addEventListener("click", () => navigate("feed"));
 
   actions.append(cancelBtn, submitBtn);
-  form.append(contentField, imageField.wrapper, actions);
+  form.append(contentField.wrapper, actions);
 
   formCard.append(formTitle, formText, form);
-  main.replaceChildren(infoCard, formCard);
+  main.replaceChildren(formCard);
 
   attachCharacterCounter("edit-post-content", "edit-post-content-counter");
 
@@ -174,7 +159,7 @@ export async function renderEditPost(app, currentUser, payload) {
 
     clearFormErrors(form);
 
-    const content = document.getElementById("edit-post-content").value;
+    const content = contentField.input.value;
 
     try {
       if (imageField.isProcessing()) {
@@ -264,22 +249,16 @@ function createEditPostLoadingSkeleton() {
 
 function createTextAreaField({ labelText, inputId, placeholder, value }) {
   const wrapper = createElement("div", { className: "field-group" });
-
   const topRow = createElement("div", { className: "field-top-row" });
-
   const label = createElement("label", {
     className: "form-label",
     text: labelText
   });
-
   const counter = createElement("span", {
     className: "char-counter",
     id: `${inputId}-counter`,
     text: `0 / ${MAX_POST_LENGTH}`
   });
-
-  topRow.append(label, counter);
-
   const textarea = document.createElement("textarea");
   textarea.className = "form-input form-textarea";
   textarea.id = inputId;
@@ -287,17 +266,33 @@ function createTextAreaField({ labelText, inputId, placeholder, value }) {
   textarea.required = true;
   textarea.maxLength = MAX_POST_LENGTH;
   textarea.value = value;
-
   const helper = createElement("p", {
     className: "field-helper",
     text: "Maximum 1000 characters."
   });
-
+  const metaRow = createElement("div", {
+    className: "create-post-text-meta-row"
+  });
+  const mediaSlot = createElement("div", {
+    className: "create-post-text-media-slot"
+  });
+  const previewSlot = createElement("div", {
+    className: "create-post-text-preview-slot"
+  });
   const error = createFieldError(inputId);
 
-  wrapper.append(topRow, textarea, helper, error);
+  topRow.append(label, counter);
+  metaRow.append(helper, mediaSlot);
+  wrapper.append(topRow, textarea, metaRow, previewSlot, error);
 
-  return wrapper;
+  return {
+    wrapper,
+    input: textarea,
+    counter,
+    mediaSlot,
+    previewSlot,
+    error
+  };
 }
 
 function attachCharacterCounter(inputId, counterId) {

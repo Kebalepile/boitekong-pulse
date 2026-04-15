@@ -13,13 +13,18 @@ export function createAvatarElement(user, { size = "md", className = "", decorat
     className: `avatar avatar-${size}${className ? ` ${className}` : ""}`
   });
 
-  const avatarDataUrl = typeof user?.avatarDataUrl === "string" ? user.avatarDataUrl : "";
+  const avatarSource =
+    typeof user?.avatarUrl === "string" && user.avatarUrl
+      ? user.avatarUrl
+      : typeof user?.avatarDataUrl === "string"
+        ? user.avatarDataUrl
+        : "";
   const avatarLabel = user?.username || "User avatar";
 
-  if (avatarDataUrl) {
+  if (avatarSource) {
     const image = document.createElement("img");
     image.className = "avatar-image";
-    image.src = avatarDataUrl;
+    image.src = avatarSource;
     image.alt = decorative ? "" : avatarLabel;
     image.loading = "lazy";
 
@@ -27,22 +32,16 @@ export function createAvatarElement(user, { size = "md", className = "", decorat
       image.setAttribute("aria-hidden", "true");
     }
 
+    image.addEventListener("error", () => {
+      avatar.replaceChildren();
+      applyAvatarPlaceholder(avatar, user, avatarLabel, decorative);
+    });
+
     avatar.appendChild(image);
     return avatar;
   }
 
-  const palette = getAvatarPalette(user?.username || "");
-  avatar.classList.add("avatar-placeholder");
-  avatar.style.background = palette.background;
-  avatar.style.color = palette.color;
-  avatar.textContent = getAvatarInitials(user?.username || "BP");
-
-  if (decorative) {
-    avatar.setAttribute("aria-hidden", "true");
-  } else {
-    avatar.setAttribute("aria-label", avatarLabel);
-    avatar.setAttribute("role", "img");
-  }
+  applyAvatarPlaceholder(avatar, user, avatarLabel, decorative);
 
   return avatar;
 }
@@ -84,4 +83,22 @@ function getAvatarPalette(seed) {
   }
 
   return AVATAR_PALETTE[total % AVATAR_PALETTE.length];
+}
+
+function applyAvatarPlaceholder(avatar, user, avatarLabel, decorative) {
+  const palette = getAvatarPalette(user?.username || "");
+  avatar.classList.add("avatar-placeholder");
+  avatar.style.background = palette.background;
+  avatar.style.color = palette.color;
+  avatar.textContent = getAvatarInitials(user?.username || "BP");
+
+  if (decorative) {
+    avatar.setAttribute("aria-hidden", "true");
+    avatar.removeAttribute("aria-label");
+    avatar.removeAttribute("role");
+    return;
+  }
+
+  avatar.setAttribute("aria-label", avatarLabel);
+  avatar.setAttribute("role", "img");
 }

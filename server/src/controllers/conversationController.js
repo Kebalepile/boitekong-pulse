@@ -53,6 +53,8 @@ export const sendMessageHandler = asyncHandler(async (req, res) => {
   const conversation = await sendMessage({
     currentUserId: req.user._id,
     conversationId: req.params.conversationId,
+    clientRequestId: req.body.clientRequestId,
+    replyToMessageId: req.body.replyToMessageId,
     text: req.body.text,
     encryptedText: req.body.encryptedText,
     encryption: req.body.encryption || null,

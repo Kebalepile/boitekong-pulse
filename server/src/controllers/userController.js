@@ -1,5 +1,6 @@
 import {
   blockUser,
+  deleteUserAvatar,
   followUser,
   getFollowerUsers,
   getDirectMessageAvailability,
@@ -9,9 +10,11 @@ import {
   setUserPreference,
   unblockUser,
   unfollowUser,
+  updateUserAvatar,
   updateDirectMessageEncryptionKey,
   updateUserProfile
 } from "../services/userService.js";
+import { AppError } from "../utils/appError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 function parseLimit(value) {
@@ -24,6 +27,35 @@ export const updateProfile = asyncHandler(async (req, res) => {
 
   res.status(200).json({
     message: "Profile updated.",
+    user
+  });
+});
+
+export const uploadAvatar = asyncHandler(async (req, res) => {
+  if (!Buffer.isBuffer(req.body)) {
+    throw new AppError("Profile photo upload is invalid.", {
+      statusCode: 400,
+      code: "AVATAR_UPLOAD_INVALID",
+      field: "avatar"
+    });
+  }
+
+  const user = await updateUserAvatar(req.user._id, {
+    fileBuffer: req.body,
+    mimeType: req.headers["content-type"]
+  });
+
+  res.status(200).json({
+    message: "Profile photo updated.",
+    user
+  });
+});
+
+export const deleteAvatar = asyncHandler(async (req, res) => {
+  const user = await deleteUserAvatar(req.user._id);
+
+  res.status(200).json({
+    message: "Profile photo removed.",
     user
   });
 });

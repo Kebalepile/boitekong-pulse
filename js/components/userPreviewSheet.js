@@ -5,6 +5,8 @@ import {
   fetchFollowingUsers,
   fetchUserProfile,
   followUserRemote,
+  getDirectMessageAvailability,
+  subscribeCurrentUserChanges,
   unfollowUserRemote
 } from "../services/userService.js";
 import { showToast } from "./toast.js";
@@ -17,6 +19,8 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
   if (!userId) {
     return;
   }
+
+  let closeSheetCleanup = () => {};
 
   const existing = document.getElementById(USER_PREVIEW_ROOT_ID);
 
@@ -44,6 +48,8 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
   });
 
   const closeSheet = () => {
+    closeSheetCleanup();
+    closeSheetCleanup = () => {};
     root.remove();
     document.removeEventListener("keydown", handleKeyDown);
   };
@@ -165,6 +171,8 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
   };
 
   const renderSheet = async (targetUserId, listType = "following") => {
+    closeSheetCleanup();
+    closeSheetCleanup = () => {};
     sheet.replaceChildren(createPreviewLoadingState());
 
     let profile;
@@ -314,7 +322,36 @@ export function showUserPreviewSheet({ userId, currentUserId, initialListType = 
       });
 
       dmBtn.appendChild(createDmIcon());
+      const syncDmButtonState = () => {
+        const availability = getDirectMessageAvailability({
+          senderUserId: currentUserId,
+          recipientUserId: user.id
+        });
+
+        dmBtn.disabled = !availability.allowed;
+        dmBtn.classList.toggle("user-preview-dm-btn-disabled", !availability.allowed);
+        dmBtn.setAttribute(
+          "title",
+          availability.allowed ? "Direct message" : availability.message || "Unavailable"
+        );
+        dmBtn.setAttribute(
+          "aria-label",
+          availability.allowed
+            ? `Direct message ${user.username}`
+            : `Direct message unavailable for ${user.username}`
+        );
+      };
+
+      syncDmButtonState();
+      closeSheetCleanup = subscribeCurrentUserChanges(() => {
+        syncDmButtonState();
+      });
+
       dmBtn.addEventListener("click", () => {
+        if (dmBtn.disabled) {
+          return;
+        }
+
         closeSheet();
         navigate("messages", { userId: user.id });
       });

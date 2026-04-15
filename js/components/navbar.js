@@ -29,61 +29,15 @@ import {
 } from "../services/userService.js";
 import {
   NOTIFICATION_BATCH_SIZE,
-  createLoadMoreControl
+  createLoadMoreControl,
+  preserveElementScrollPosition
 } from "../utils/listBatching.js";
-
-let deferredInstallPrompt = null;
-let installPromptBound = false;
-
-function isStandaloneApp() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  return (
-    window.matchMedia?.("(display-mode: standalone)").matches ||
-    window.navigator?.standalone === true
-  );
-}
-
-function bindInstallPrompt() {
-  if (typeof window === "undefined" || installPromptBound) {
-    return;
-  }
-
-  installPromptBound = true;
-
-  window.addEventListener("beforeinstallprompt", (event) => {
-    event.preventDefault();
-    deferredInstallPrompt = event;
-  });
-
-  window.addEventListener("appinstalled", () => {
-    deferredInstallPrompt = null;
-  });
-}
-
-function canInstallApp() {
-  return !isStandaloneApp() && Boolean(deferredInstallPrompt);
-}
-
-async function promptInstallApp() {
-  if (!deferredInstallPrompt) {
-    return false;
-  }
-
-  const installPrompt = deferredInstallPrompt;
-  deferredInstallPrompt = null;
-
-  try {
-    await installPrompt.prompt();
-    await installPrompt.userChoice;
-  } catch {
-    return false;
-  }
-
-  return true;
-}
+import {
+  bindInstallPrompt,
+  canInstallApp,
+  getInstallGuidance,
+  promptInstallApp
+} from "../utils/pwaInstall.js";
 
 export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   bindInstallPrompt();
@@ -607,34 +561,19 @@ function createTopbarDrawer({
         const didPrompt = await promptInstallApp();
 
         if (!didPrompt) {
-          showToast("Install is not available on this device yet.", "error");
+          showToast(getInstallGuidance(), "error", {
+            title: "Install"
+          });
         }
       }
     });
     installItem.hidden = !canInstallApp();
-    const contactTitle = createElement("p", {
-      className: "topbar-drawer-section-title",
-      text: "Contact us"
-    });
-    const contactList = createElement("div", {
-      className: "topbar-drawer-contact-list"
-    });
-    const emailRow = createDrawerInfoRow("Email", "kmotshoana@gmail.com", {
-      href: "mailto:kmotshoana@gmail.com"
-    });
-    const githubRow = createDrawerInfoRow("GitHub", "github.com/Kebalepile", {
-      href: "https://github.com/Kebalepile"
-    });
-    const phoneRow = createDrawerInfoRow("Phone", "069 848 8813", {
-      href: "tel:0698488813"
-    });
     const copyright = createElement("p", {
       className: "topbar-drawer-copyright",
-      text: "Copyright 2025 Boitekong Pulse. All rights reserved."
+      text: "Copyright 2025\nBoitekong Pulse. All rights reserved."
     });
 
-    contactList.append(emailRow, githubRow, phoneRow);
-    infoSection.append(aboutTitle, aboutCopy, installItem, contactTitle, contactList, copyright);
+    infoSection.append(aboutTitle, aboutCopy, installItem, copyright);
 
     panel.append(header, navSection, accountSection, infoSection);
     root.append(overlay, panel);
@@ -904,7 +843,9 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
             className: "topbar-notifications-load-more",
             onClick: () => {
               visibleNotificationCount += NOTIFICATION_BATCH_SIZE;
-              renderList();
+              preserveElementScrollPosition(list, () => {
+                renderList();
+              });
             }
           })
         );
@@ -1078,12 +1019,17 @@ async function handleNotificationSelection({
   }
 
   if (
-    (
-      notification.type === "post_comment" ||
-      notification.type === "comment_reply" ||
-      notification.type === "post_reaction" ||
-      notification.type === "comment_reaction"
-    ) &&
+    (notification.type === "post_comment" || notification.type === "post_reaction") &&
+    notification.postId
+  ) {
+    onNavigate("feed", {
+      postId: notification.postId
+    });
+    return;
+  }
+
+  if (
+    (notification.type === "comment_reply" || notification.type === "comment_reaction") &&
     notification.postId
   ) {
     onNavigate("feed", {
@@ -1282,36 +1228,6 @@ function createMenuItem({
   });
 
   return button;
-}
-
-function createDrawerInfoRow(label, value, options = {}) {
-  const row = createElement("div", { className: "topbar-drawer-contact-row" });
-  const labelNode = createElement("span", {
-    className: "topbar-drawer-contact-label",
-    text: label
-  });
-
-  let valueNode;
-
-  if (options.href) {
-    valueNode = createElement("a", {
-      className: "topbar-drawer-contact-link",
-      text: value,
-      attributes: {
-        href: options.href,
-        target: "_blank",
-        rel: "noreferrer"
-      }
-    });
-  } else {
-    valueNode = createElement("span", {
-      className: "topbar-drawer-contact-value",
-      text: value
-    });
-  }
-
-  row.append(labelNode, valueNode);
-  return row;
 }
 
 function formatSearchModeLabel(value) {

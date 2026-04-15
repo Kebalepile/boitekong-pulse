@@ -1,7 +1,11 @@
 import { storage } from "../storage/storage.js";
 import { STORAGE_KEYS } from "../config/storageKeys.js";
-import { apiRequest } from "./apiClient.js";
+import { apiRequest, resolveApiAssetUrl } from "./apiClient.js";
 import { normalizeUserDirectMessageEncryption } from "../utils/directMessageEncryption.js";
+
+let usersCache = null;
+let currentUserCache = undefined;
+const currentUserListeners = new Set();
 
 function createQueryString(params = {}) {
   const query = new URLSearchParams();
@@ -19,18 +23,17 @@ function createQueryString(params = {}) {
 }
 
 function normalizeUserRecord(user = {}) {
-  const avatarDataUrl =
-    typeof user.avatarDataUrl === "string" && user.avatarDataUrl
-      ? user.avatarDataUrl
-      : typeof user.avatarUrl === "string"
-        ? user.avatarUrl
-        : "";
+  const rawAvatarUrl = typeof user.avatarUrl === "string" ? user.avatarUrl.trim() : "";
+  const rawAvatarDataUrl =
+    typeof user.avatarDataUrl === "string" ? user.avatarDataUrl.trim() : "";
+  const preferredAvatarSource = rawAvatarUrl || rawAvatarDataUrl;
+  const avatarUrl = resolveApiAssetUrl(preferredAvatarSource);
+  const avatarDataUrl = resolveApiAssetUrl(preferredAvatarSource);
 
   return {
     ...user,
     avatarDataUrl,
-    avatarUrl:
-      typeof user.avatarUrl === "string" && user.avatarUrl ? user.avatarUrl : avatarDataUrl,
+    avatarUrl,
     phoneNumber: typeof user.phoneNumber === "string" ? user.phoneNumber : "",
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
@@ -70,23 +73,93 @@ function normalizeUserRecord(user = {}) {
   };
 }
 
+function serializeUserRecord(user = {}) {
+  const normalizedUser = normalizeUserRecord(user);
+
+  if (
+    normalizedUser.avatarDataUrl &&
+    normalizedUser.avatarUrl &&
+    normalizedUser.avatarDataUrl === normalizedUser.avatarUrl
+  ) {
+    return {
+      ...normalizedUser,
+      avatarUrl: ""
+    };
+  }
+
+  return normalizedUser;
+}
+
+function hasOwnProperty(object, key) {
+  return Boolean(object) && Object.prototype.hasOwnProperty.call(object, key);
+}
+
+function isFullUserRecord(user = {}) {
+  return [
+    "phoneNumber",
+    "directMessagesEnabled",
+    "notificationsEnabled",
+    "blockedUserIds",
+    "followingUserIds",
+    "phoneVerified",
+    "roles",
+    "directMessageEncryption"
+  ].some((key) => hasOwnProperty(user, key));
+}
+
+function getCurrentUserIdHint() {
+  if (typeof currentUserCache?.id === "string" && currentUserCache.id) {
+    return currentUserCache.id;
+  }
+
+  const storedCurrentUser = storage.get(STORAGE_KEYS.CURRENT_USER, null);
+  return typeof storedCurrentUser?.id === "string" ? storedCurrentUser.id : "";
+}
+
+function mergeUserRecord(existingUser, incomingUser, rawIncomingUser) {
+  if (!existingUser) {
+    return incomingUser;
+  }
+
+  const mergedUser = {
+    ...existingUser,
+    ...incomingUser
+  };
+  const incomingIsFull = isFullUserRecord(rawIncomingUser);
+  const isCurrentUser = getCurrentUserIdHint() === existingUser.id;
+
+  if (isCurrentUser && !incomingIsFull) {
+    mergedUser.avatarUrl = existingUser.avatarUrl || incomingUser.avatarUrl || "";
+    mergedUser.avatarDataUrl =
+      existingUser.avatarDataUrl || existingUser.avatarUrl || incomingUser.avatarDataUrl || "";
+  }
+
+  return mergedUser;
+}
+
 export function getUsers() {
+  if (Array.isArray(usersCache)) {
+    return usersCache.slice();
+  }
+
   const users = storage.get(STORAGE_KEYS.USERS, []);
-  return Array.isArray(users) ? users.map(normalizeUserRecord) : [];
+  usersCache = Array.isArray(users) ? users.map(normalizeUserRecord) : [];
+  return usersCache.slice();
 }
 
 export function saveUsers(users) {
-  storage.set(
-    STORAGE_KEYS.USERS,
-    Array.isArray(users) ? users.map(normalizeUserRecord) : []
-  );
+  usersCache = Array.isArray(users) ? users.map(normalizeUserRecord) : [];
+  storage.set(STORAGE_KEYS.USERS, usersCache.map(serializeUserRecord));
 }
 
 export function upsertUsers(users = []) {
   const incomingUsers = Array.isArray(users)
     ? users
-        .map(normalizeUserRecord)
-        .filter((user) => typeof user.id === "string" && user.id.trim())
+        .map((user) => ({
+          raw: user,
+          normalized: normalizeUserRecord(user)
+        }))
+        .filter(({ normalized }) => typeof normalized.id === "string" && normalized.id.trim())
     : [];
 
   if (incomingUsers.length === 0) {
@@ -95,16 +168,16 @@ export function upsertUsers(users = []) {
 
   const usersById = new Map(getUsers().map((user) => [user.id, user]));
 
-  incomingUsers.forEach((user) => {
-    usersById.set(user.id, {
-      ...(usersById.get(user.id) || {}),
-      ...user
-    });
+  incomingUsers.forEach(({ raw, normalized }) => {
+    usersById.set(
+      normalized.id,
+      mergeUserRecord(usersById.get(normalized.id) || null, normalized, raw)
+    );
   });
 
   const nextUsers = Array.from(usersById.values());
   saveUsers(nextUsers);
-  return incomingUsers.map((user) => usersById.get(user.id));
+  return incomingUsers.map(({ normalized }) => usersById.get(normalized.id));
 }
 
 export function upsertUser(user) {
@@ -122,21 +195,60 @@ export function findUserById(userId) {
 
 export function setCurrentUser(user) {
   const normalizedUser = user ? normalizeUserRecord(user) : null;
+  currentUserCache = normalizedUser;
 
   if (normalizedUser) {
     upsertUser(normalizedUser);
   }
 
-  storage.set(STORAGE_KEYS.CURRENT_USER, normalizedUser);
+  storage.set(
+    STORAGE_KEYS.CURRENT_USER,
+    normalizedUser ? serializeUserRecord(normalizedUser) : null
+  );
+  emitCurrentUserChange(normalizedUser);
 }
 
 export function getCurrentUser() {
+  if (currentUserCache !== undefined) {
+    return currentUserCache;
+  }
+
   const currentUser = storage.get(STORAGE_KEYS.CURRENT_USER, null);
-  return currentUser ? normalizeUserRecord(currentUser) : null;
+  currentUserCache = currentUser ? normalizeUserRecord(currentUser) : null;
+  return currentUserCache;
 }
 
 export function clearCurrentUser() {
+  currentUserCache = null;
   storage.remove(STORAGE_KEYS.CURRENT_USER);
+  emitCurrentUserChange(null);
+}
+
+export function resetUserState() {
+  usersCache = null;
+  currentUserCache = undefined;
+}
+
+export function subscribeCurrentUserChanges(listener) {
+  if (typeof listener !== "function") {
+    return () => {};
+  }
+
+  currentUserListeners.add(listener);
+
+  return () => {
+    currentUserListeners.delete(listener);
+  };
+}
+
+function emitCurrentUserChange(user) {
+  currentUserListeners.forEach((listener) => {
+    try {
+      listener(user);
+    } catch {
+      // Ignore listener errors so user state updates continue.
+    }
+  });
 }
 
 export function getFollowerCount(userId) {
@@ -320,18 +432,45 @@ export async function updateUserProfileRemote({
   newPassword,
   confirmNewPassword
 }) {
+  const body = {
+    username,
+    phoneNumber,
+    township,
+    extension,
+    currentPassword,
+    newPassword,
+    confirmNewPassword
+  };
+
+  if (avatarDataUrl !== undefined || avatarUrl !== undefined) {
+    body.avatarUrl = avatarDataUrl ?? avatarUrl ?? "";
+  }
+
   const response = await apiRequest("/users/me/profile", {
     method: "PATCH",
-    body: {
-      username,
-      phoneNumber,
-      township,
-      extension,
-      avatarUrl: avatarDataUrl ?? avatarUrl ?? "",
-      currentPassword,
-      newPassword,
-      confirmNewPassword
-    }
+    body
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function uploadUserAvatarRemote({ file }) {
+  const response = await apiRequest("/users/me/avatar", {
+    method: "PUT",
+    headers: {
+      "Content-Type": file?.type || "application/octet-stream"
+    },
+    body: file
+  });
+  const user = upsertUser(response.user);
+  setCurrentUser(user);
+  return user;
+}
+
+export async function deleteUserAvatarRemote() {
+  const response = await apiRequest("/users/me/avatar", {
+    method: "DELETE"
   });
   const user = upsertUser(response.user);
   setCurrentUser(user);

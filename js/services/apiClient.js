@@ -63,6 +63,21 @@ export function getApiBaseUrl() {
   return resolveApiBaseUrl();
 }
 
+export function resolveApiAssetUrl(value = "") {
+  const trimmedValue = String(value || "").trim();
+
+  if (!trimmedValue || /^(?:https?:|data:|blob:)/i.test(trimmedValue)) {
+    return trimmedValue;
+  }
+
+  try {
+    const apiBaseUrl = new URL(getApiBaseUrl());
+    return new URL(trimmedValue, `${apiBaseUrl.origin}/`).toString();
+  } catch {
+    return trimmedValue;
+  }
+}
+
 export async function apiRequest(path, options = {}) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const url = `${getApiBaseUrl()}${normalizedPath}`;
@@ -79,8 +94,16 @@ export async function apiRequest(path, options = {}) {
   }
 
   let body = options.body;
+  const isBlobBody = typeof Blob !== "undefined" && body instanceof Blob;
+  const isArrayBufferBody = body instanceof ArrayBuffer || ArrayBuffer.isView(body);
 
-  if (body !== undefined && body !== null && !(body instanceof FormData)) {
+  if (
+    body !== undefined &&
+    body !== null &&
+    !(body instanceof FormData) &&
+    !isBlobBody &&
+    !isArrayBufferBody
+  ) {
     if (!headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
@@ -95,7 +118,8 @@ export async function apiRequest(path, options = {}) {
       method,
       headers,
       body,
-      mode: "cors"
+      mode: "cors",
+      cache: "no-store"
     });
   } catch (error) {
     const networkError = new Error(

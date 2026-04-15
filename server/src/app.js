@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import morgan from "morgan";
+import { getAvatarUploadsDirectory } from "./utils/avatarUploads.js";
 import { env } from "./config/env.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import apiRoutes from "./routes/index.js";
@@ -38,6 +39,7 @@ export function createApp() {
     app.use(morgan("dev"));
   }
 
+  app.use("/uploads/avatars", express.static(getAvatarUploadsDirectory()));
   app.use("/api", apiRoutes);
   app.use(notFoundHandler);
   app.use(errorHandler);

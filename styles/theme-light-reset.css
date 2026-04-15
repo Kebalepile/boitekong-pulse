@@ -253,9 +253,7 @@ select:focus {
 }
 
 .feed-stat-pill,
-.user-preview-stat,
-.image-upload-panel,
-.avatar-upload-panel {
+.user-preview-stat {
   background: rgba(248, 250, 252, 0.96);
   border-color: var(--border-soft);
 }

@@ -49,6 +49,18 @@ const messageSchema = new Schema(
       required: true,
       index: true
     },
+    replyToMessageId: {
+      type: Schema.Types.ObjectId,
+      ref: "Message",
+      default: null,
+      index: true
+    },
+    clientRequestId: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 128
+    },
     text: {
       type: String,
       default: "",
@@ -92,5 +104,16 @@ const messageSchema = new Schema(
 
 messageSchema.index({ conversationId: 1, createdAt: 1 });
 messageSchema.index({ senderId: 1, createdAt: -1 });
+messageSchema.index(
+  { conversationId: 1, senderId: 1, clientRequestId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      clientRequestId: {
+        $type: "string"
+      }
+    }
+  }
+);
 
 export const Message = mongoose.model("Message", messageSchema);

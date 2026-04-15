@@ -13,6 +13,7 @@ import {
 } from "../utils/dom.js";
 import { showToast } from "../components/toast.js";
 import { createBrandMark } from "../components/brandMark.js";
+import { createPublicSiteFooter } from "../components/publicSiteFooter.js";
 
 const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
 const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
@@ -286,7 +287,13 @@ export function renderRegister(app) {
   card.append(brand, header, form, loginBtn);
   pane.append(card);
   layout.append(pane);
-  shell.append(layout, createAuthSiteFooter());
+  shell.append(
+    layout,
+    createPublicSiteFooter({
+      origin: "register",
+      onNavigate: navigate
+    })
+  );
   app.appendChild(shell);
 
   let currentStep = 1;
@@ -1020,35 +1027,6 @@ function createRegisterProgress() {
       });
     }
   };
-}
-
-function createAuthSiteFooter() {
-  const footer = createElement("footer", { className: "auth-site-footer" });
-  const links = createElement("div", { className: "auth-site-footer-links" });
-  const meta = createElement("div", { className: "auth-site-footer-meta" });
-
-  ["About", "Help", "Privacy", "Terms & Conditions", "Contact"].forEach((itemText) => {
-    links.appendChild(
-      createElement("span", {
-        className: "auth-site-footer-link",
-        text: itemText
-      })
-    );
-  });
-
-  meta.append(
-    createElement("span", {
-      className: "auth-site-footer-meta-text",
-      text: "English"
-    }),
-    createElement("span", {
-      className: "auth-site-footer-meta-text",
-      text: "Copyright 2025 Boitekong Pulse"
-    })
-  );
-
-  footer.append(links, meta);
-  return footer;
 }
 
 function handleRegisterError(

@@ -11,6 +11,12 @@ const postSchema = new Schema(
       required: true,
       index: true
     },
+    clientRequestId: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 128
+    },
     content: {
       type: String,
       default: "",
@@ -51,5 +57,16 @@ const postSchema = new Schema(
 
 postSchema.index({ createdAt: -1 });
 postSchema.index({ userId: 1, createdAt: -1 });
+postSchema.index(
+  { userId: 1, clientRequestId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      clientRequestId: {
+        $type: "string"
+      }
+    }
+  }
+);
 
 export const Post = mongoose.model("Post", postSchema);

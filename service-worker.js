@@ -1,5 +1,14 @@
-const CACHE_NAME = "boitekong-pulse-shell-v2";
-const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./styles/main.css", "./assets/app-icon.png"];
+const CACHE_NAME = "boitekong-pulse-shell-v3";
+const APP_SHELL = [
+  "./",
+  "./index.html",
+  "./manifest.webmanifest",
+  "./styles/main.css",
+  "./assets/app-icon.png",
+  "./assets/pwa-icon-192.png",
+  "./assets/pwa-icon-512.png",
+  "./assets/apple-touch-icon-180.png"
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
