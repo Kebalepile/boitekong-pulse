@@ -1547,6 +1547,11 @@ body.profile-photo-viewer-open {
 }
 
 @media (max-width: 640px) {
+  .create-post-actions,
+  .edit-post-actions {
+    justify-content: center;
+  }
+
   .profile-edit-actions {
     width: 100%;
   }

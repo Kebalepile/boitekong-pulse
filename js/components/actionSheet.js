@@ -1,4 +1,5 @@
 import { createElement } from "../utils/dom.js";
+import { createAvatarElement } from "../utils/avatar.js";
 
 export function showActionSheet({ title = "Options", actions = [] }) {
   const existing = document.getElementById("action-sheet-root");
@@ -63,7 +64,7 @@ export function showActionSheet({ title = "Options", actions = [] }) {
 
   actions
     .filter((action) => action && typeof action.onSelect === "function")
-    .forEach(({ label, onSelect, danger = false, iconName = "" }) => {
+    .forEach(({ label, onSelect, danger = false, iconName = "", avatarUser = null }) => {
       const button = createElement("button", {
         className: `action-sheet-btn${danger ? " action-sheet-btn-danger" : ""}`,
         type: "button"
@@ -71,13 +72,19 @@ export function showActionSheet({ title = "Options", actions = [] }) {
       const content = createElement("span", {
         className: "action-sheet-btn-content"
       });
-      const icon = createActionSheetIcon(iconName || inferActionSheetIconName(label));
+      const leading = avatarUser
+        ? createAvatarElement(avatarUser, {
+            size: "sm",
+            className: "action-sheet-avatar",
+            decorative: true
+          })
+        : createActionSheetIcon(iconName || inferActionSheetIconName(label));
       const text = createElement("span", {
         className: "action-sheet-btn-text",
         text: label
       });
 
-      content.append(icon, text);
+      content.append(leading, text);
       button.appendChild(content);
 
       button.addEventListener("click", async () => {

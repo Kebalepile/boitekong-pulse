@@ -8,6 +8,7 @@ const dateFormatterCache = new Map();
 const VOICE_NOTE_PRESENT_FILTER = {
   $or: [
     { "voiceNote.audioData": { $exists: true, $ne: null } },
+    { "voiceNote.encryptedAudioBase64": { $exists: true, $ne: "" } },
     { "voiceNote.url": { $exists: true, $ne: "" } },
     { "voiceNote.storageKey": { $exists: true, $ne: "" } }
   ]

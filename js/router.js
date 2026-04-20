@@ -23,8 +23,10 @@ import {
   resolvePublicInfoOrigin,
   resolvePublicInfoPageKey
 } from "./config/publicInfoPages.js";
+import { SHARE_FEED_COMMENT_PARAM, SHARE_FEED_POST_PARAM } from "./utils/share.js";
 
 const ROUTER_HISTORY_APP_ID = "boitekong-pulse";
+const ROUTE_TRANSITION_OVERLAY_NAMES = new Set(["public-info"]);
 const RESTORABLE_ROUTE_NAMES = new Set([
   "feed",
   "profile",
@@ -243,6 +245,90 @@ function readHistoryRouteState() {
   return normalizeRouteState(state.routeName, state.payload);
 }
 
+function normalizeAuthenticatedRouteState(routeState) {
+  if (!routeState || !RESTORABLE_ROUTE_NAMES.has(routeState.routeName)) {
+    return null;
+  }
+
+  return routeState;
+}
+
+function readUrlRouteState() {
+  if (typeof window === "undefined" || !window.location) {
+    return null;
+  }
+
+  try {
+    const url = new URL(window.location.href);
+    const postId = typeof url.searchParams.get(SHARE_FEED_POST_PARAM) === "string"
+      ? url.searchParams.get(SHARE_FEED_POST_PARAM).trim()
+      : "";
+    const focusCommentId =
+      typeof url.searchParams.get(SHARE_FEED_COMMENT_PARAM) === "string"
+        ? url.searchParams.get(SHARE_FEED_COMMENT_PARAM).trim()
+        : "";
+
+    if (!postId) {
+      return null;
+    }
+
+    return normalizeRouteState("feed", {
+      postId,
+      focusCommentId
+    });
+  } catch {
+    return null;
+  }
+}
+
+function buildRouteHref(routeState) {
+  if (typeof window === "undefined" || !window.location) {
+    return "";
+  }
+
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete(SHARE_FEED_POST_PARAM);
+    url.searchParams.delete(SHARE_FEED_COMMENT_PARAM);
+
+    if (routeState?.routeName === "feed" && routeState.payload?.postId) {
+      url.searchParams.set(SHARE_FEED_POST_PARAM, routeState.payload.postId);
+
+      if (routeState.payload.focusCommentId) {
+        url.searchParams.set(SHARE_FEED_COMMENT_PARAM, routeState.payload.focusCommentId);
+      }
+    }
+
+    return url.toString();
+  } catch {
+    return window.location.href;
+  }
+}
+
+function getRouteTransitionLabel(routeName) {
+  switch (routeName) {
+    case "public-info":
+      return "Opening page...";
+    default:
+      return "Loading...";
+  }
+}
+
+export function getPreferredAuthenticatedRouteState() {
+  return (
+    normalizeAuthenticatedRouteState(readUrlRouteState()) ||
+    normalizeAuthenticatedRouteState(readPersistedRouteState()) ||
+    normalizeAuthenticatedRouteState(readHistoryRouteState()) ||
+    normalizeRouteState("feed", null)
+  );
+}
+
+export async function navigateAfterAuthentication(options = {}) {
+  const nextRouteState = getPreferredAuthenticatedRouteState();
+
+  return navigate(nextRouteState.routeName, nextRouteState.payload, options);
+}
+
 function syncHistoryState(routeState, mode = "push") {
   if (typeof window === "undefined" || !window.history || !routeState) {
     return;
@@ -253,7 +339,7 @@ function syncHistoryState(routeState, mode = "push") {
     routeName: routeState.routeName,
     payload: clonePayload(routeState.payload)
   };
-  const href = window.location.href;
+  const href = buildRouteHref(routeState) || window.location.href;
 
   if (mode === "replace") {
     window.history.replaceState(historyState, "", href);
@@ -262,29 +348,6 @@ function syncHistoryState(routeState, mode = "push") {
 
   if (mode === "push") {
     window.history.pushState(historyState, "", href);
-  }
-}
-
-function getRouteTransitionLabel(routeName, payload = null) {
-  switch (routeName) {
-    case "feed":
-      return "Loading feed...";
-    case "profile":
-      return "Loading profile...";
-    case "create-post":
-      return "Opening post editor...";
-    case "edit-post":
-      return "Opening post editor...";
-    case "messages":
-      return payload?.conversationId || payload?.userId
-        ? "Opening chat..."
-        : "Loading messages...";
-    case "search":
-      return payload?.query ? "Loading search..." : "Opening search...";
-    case "public-info":
-      return "Opening page...";
-    default:
-      return "Loading...";
   }
 }
 
@@ -366,8 +429,8 @@ async function requireAuth(app, renderFn, payload) {
     // Keep rendering the current screen even if preload fails.
   }
 
-  await renderFn(app, currentUser, payload);
-  return true;
+  const renderResult = await renderFn(app, currentUser, payload);
+  return renderResult ?? true;
 }
 
 export async function navigate(routeName, payload = null, options = {}) {
@@ -391,10 +454,11 @@ export async function navigate(routeName, payload = null, options = {}) {
     skipTransition !== true &&
     normalizedRouteState.routeName !== "login" &&
     normalizedRouteState.routeName !== "register" &&
-    !isSameRouteName;
+    !isSameRouteName &&
+    ROUTE_TRANSITION_OVERLAY_NAMES.has(normalizedRouteState.routeName);
   const overlay = shouldShowTransition
     ? showLoadingOverlay({
-        label: transitionLabel || getRouteTransitionLabel(normalizedRouteState.routeName, normalizedRouteState.payload)
+        label: transitionLabel || getRouteTransitionLabel(normalizedRouteState.routeName)
       })
     : null;
 
@@ -440,10 +504,15 @@ export async function navigate(routeName, payload = null, options = {}) {
         routeHandled = false;
     }
 
+    const redirectedRouteState =
+      routeHandled && typeof routeHandled === "object"
+        ? normalizeRouteState(routeHandled.routeName, routeHandled.payload)
+        : null;
     const nextRouteState =
-      routeHandled === false && normalizedRouteState.routeName !== "login"
+      redirectedRouteState ||
+      (routeHandled === false && normalizedRouteState.routeName !== "login"
         ? normalizeRouteState("login", null)
-        : normalizedRouteState;
+        : normalizedRouteState);
     const previousRouteState = currentRouteState;
 
     currentRouteState = nextRouteState;
@@ -463,12 +532,12 @@ export async function navigate(routeName, payload = null, options = {}) {
 
 export async function initRouter() {
   bindPopstateHandler();
+  const urlRouteState = readUrlRouteState();
 
   const currentUser = getAuthenticatedUser() || (await resolveAuthenticatedUser());
 
   if (currentUser) {
-    const restoredRouteState =
-      readHistoryRouteState() || readPersistedRouteState() || normalizeRouteState("feed", null);
+    const restoredRouteState = getPreferredAuthenticatedRouteState();
 
     try {
       await navigate(restoredRouteState.routeName, restoredRouteState.payload, {
@@ -483,7 +552,11 @@ export async function initRouter() {
     return;
   }
 
-  storage.remove(STORAGE_KEYS.LAST_ROUTE);
+  if (urlRouteState) {
+    persistRouteState(urlRouteState);
+  } else {
+    storage.remove(STORAGE_KEYS.LAST_ROUTE);
+  }
   await navigate("login", null, {
     historyMode: "replace",
     skipTransition: true

@@ -37,6 +37,12 @@ import {
 } from "../services/userService.js";
 import { setLiveSyncOptions } from "../services/liveSyncService.js";
 import { showLoadingOverlay } from "../components/loadingOverlay.js";
+import { protectImageElement, protectMediaShell } from "../utils/protectedMedia.js";
+import {
+  buildBrandedShareData,
+  buildShareClipboardText,
+  getShareableAppUrl
+} from "../utils/share.js";
 
 const PROFILE_LOAD_PLACEHOLDER_TIMEOUT_MS = 3000;
 const PROFILE_AVATAR_SCALE_STEPS = [1, 0.82, 0.68, 0.56];
@@ -154,11 +160,6 @@ export async function renderProfile(app, currentUser, payload = null) {
     text: "Edit profile",
     type: "button"
   });
-  const addPostBtn = createElement("button", {
-    className: "secondary-btn profile-channel-btn",
-    text: "Add post",
-    type: "button"
-  });
   const inviteBtn = createElement("button", {
     className: "secondary-btn profile-channel-btn",
     text: "Invite",
@@ -167,25 +168,30 @@ export async function renderProfile(app, currentUser, payload = null) {
   editProfileBtn.addEventListener("click", () => {
     navigate("profile", { editMode: true });
   });
-  addPostBtn.addEventListener("click", () => navigate("create-post"));
   inviteBtn.addEventListener("click", async () => {
     await shareAppInvite(currentUser);
   });
-  actionRow.append(editProfileBtn, addPostBtn, inviteBtn);
+  actionRow.append(editProfileBtn, inviteBtn);
 
   const tabs = createElement("div", { className: "profile-channel-tabs" });
   tabs.append(
-    createChannelTab("Home", {
+    createChannelTab("Feed", {
       active: activeSection === "home",
       onClick: () => navigate("feed")
     }),
-    createChannelTab("Posts", {
+    createChannelTab("My Posts", {
       onClick: () =>
-        navigate("search", {
-          mode: "posts",
-          authorUserId: currentUser.id,
-          authorUsername: currentUser.username
-        })
+        navigate(
+          "search",
+          {
+            mode: "posts",
+            authorUserId: currentUser.id,
+            authorUsername: currentUser.username
+          },
+          {
+            skipTransition: true
+          }
+        )
     }),
     createChannelTab("Followers", {
       active: activeSection === "followers",
@@ -538,7 +544,7 @@ function createProfileLoadingSkeleton({ activeSection = "home", showEditForm = f
     className: "profile-channel-tabs profile-loading-tabs"
   });
 
-  for (let index = 0; index < 3; index += 1) {
+  for (let index = 0; index < 2; index += 1) {
     actions.appendChild(
       createElement("span", {
         className: "feed-skeleton-chip profile-loading-action-chip"
@@ -1063,11 +1069,13 @@ function showProfilePhotoViewer({ imageUrl = "", username = "", onDelete = null 
   const frame = createElement("div", {
     className: "profile-photo-viewer-frame"
   });
+  protectMediaShell(frame);
   const image = document.createElement("img");
   image.className = "profile-photo-viewer-image";
   image.src = normalizedImageUrl;
   image.alt = username ? `${username}'s profile photo` : "Profile photo";
   image.decoding = "async";
+  protectImageElement(image);
   const deleteBtn = createElement("button", {
     className: "profile-photo-viewer-delete-btn",
     type: "button",
@@ -1185,25 +1193,20 @@ async function shareAppInvite(currentUser) {
     `Hi, I'm using Boitekong Pulse as ${username}.`,
     `Join me on the app for local updates, posts, replies, and voice notes${locationText ? ` around ${locationText}` : ""}.`
   ].join(" ");
+  const shareMessage = buildShareClipboardText(shareText, appUrl);
 
   try {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      const shareData = {
+      const shareData = await buildBrandedShareData({
         title: "Join me on Boitekong Pulse",
-        text: shareText
-      };
-
-      if (appUrl) {
-        shareData.url = appUrl;
-      }
-
+        text: shareMessage
+      });
       await navigator.share(shareData);
       return;
     }
 
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      const clipboardText = appUrl ? `${shareText}\n${appUrl}` : shareText;
-      await navigator.clipboard.writeText(clipboardText);
+      await navigator.clipboard.writeText(shareMessage);
       showToast("Invite copied to clipboard.", "success");
       return;
     }
@@ -1217,25 +1220,6 @@ async function shareAppInvite(currentUser) {
     showToast(error.message || "Could not share invite.", "error");
   }
 }
-
-function getShareableAppUrl() {
-  if (typeof window === "undefined" || !window.location) {
-    return "";
-  }
-
-  const { protocol, hostname, origin } = window.location;
-
-  if (!origin || protocol === "file:") {
-    return "";
-  }
-
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return "";
-  }
-
-  return origin;
-}
-
 function createChannelTab(label, options = {}) {
   const button = createElement("button", {
     className: `profile-channel-tab${options.active ? " profile-channel-tab-active" : ""}`,

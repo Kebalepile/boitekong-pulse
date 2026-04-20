@@ -8,6 +8,7 @@ import { Message } from "../models/Message.js";
 import { Notification } from "../models/Notification.js";
 import { Post } from "../models/Post.js";
 import { User } from "../models/User.js";
+import { MAX_VOICE_NOTE_AUDIO_BYTES } from "../utils/validators.js";
 
 function createQuery(initialValue) {
   let currentValue = Array.isArray(initialValue) ? [...initialValue] : initialValue;
@@ -284,16 +285,16 @@ function createDirectMessageTestHarness({ messages = [] } = {}) {
       {
         target: User,
         methodName: "findById",
-        implementation: async (userId) => {
+        implementation: (userId) => {
           if (String(userId) === String(currentUser._id)) {
-            return currentUser;
+            return createQuery(currentUser);
           }
 
           if (String(userId) === String(recipientUser._id)) {
-            return recipientUser;
+            return createQuery(recipientUser);
           }
 
-          return null;
+          return createQuery(null);
         }
       },
       {
@@ -319,6 +320,21 @@ function createDirectMessageTestHarness({ messages = [] } = {}) {
         methodName: "find",
         implementation: (filter = {}) =>
           createQuery(messageStore.filter((message) => matchesMessageFilter(message, filter)))
+      },
+      {
+        target: Message,
+        methodName: "countDocuments",
+        implementation: async () => 0
+      },
+      {
+        target: Post,
+        methodName: "countDocuments",
+        implementation: async () => 0
+      },
+      {
+        target: Comment,
+        methodName: "countDocuments",
+        implementation: async () => 0
       },
       {
         target: Message,
@@ -358,8 +374,8 @@ function createPostTestHarness({ posts = [] } = {}) {
       {
         target: User,
         methodName: "findById",
-        implementation: async (userId) =>
-          String(userId) === String(currentUser._id) ? currentUser : null
+        implementation: (userId) =>
+          createQuery(String(userId) === String(currentUser._id) ? currentUser : null)
       },
       {
         target: User,
@@ -428,6 +444,98 @@ const tests = [
         assert.equal(harness.getCreateCallCount(), 0);
         assert.equal(conversation.messages.length, 1);
         assert.equal(conversation.messages[0].id, String(existingMessage._id));
+      });
+    }
+  },
+  {
+    name: "sendMessage accepts an encrypted DM voice note payload",
+    async run() {
+      const harness = createDirectMessageTestHarness();
+
+      await withPatchedMethods(harness.patches, async () => {
+        const conversation = await sendMessage({
+          currentUserId: harness.currentUser._id,
+          conversationId: harness.conversation._id,
+          encryption: {
+            iv: "AQIDBAUGBwgJCgsM",
+            senderKeyId: "dmk_sender",
+            recipientKeyId: "dmk_recipient",
+            senderPublicKeyJwk: {
+              kty: "EC",
+              crv: "P-256",
+              x: "abc",
+              y: "def"
+            },
+            recipientPublicKeyJwk: {
+              kty: "EC",
+              crv: "P-256",
+              x: "ghi",
+              y: "jkl"
+            }
+          },
+          voiceNote: {
+            encryptedAudioBase64: "AQIDBAUGBwgJCgsM",
+            mimeType: "audio/webm",
+            durationMs: 1200,
+            size: 12,
+            waveform: [0.2, 0.5, 0.8]
+          }
+        });
+
+        assert.equal(harness.getCreateCallCount(), 1);
+        assert.equal(conversation.messages.length, 1);
+        assert.equal(
+          conversation.messages[0].voiceNote?.encryptedAudioBase64,
+          "AQIDBAUGBwgJCgsM"
+        );
+        assert.equal(conversation.messages[0].voiceNote?.audioBase64, "");
+      });
+    }
+  },
+  {
+    name: "sendMessage rejects an oversized encrypted DM voice note payload",
+    async run() {
+      const harness = createDirectMessageTestHarness();
+      const oversizedEncryptedPayload = Buffer.alloc(MAX_VOICE_NOTE_AUDIO_BYTES + 1, 1).toString("base64");
+
+      await withPatchedMethods(harness.patches, async () => {
+        await assert.rejects(
+          () =>
+            sendMessage({
+              currentUserId: harness.currentUser._id,
+              conversationId: harness.conversation._id,
+              encryption: {
+                iv: "AQIDBAUGBwgJCgsM",
+                senderKeyId: "dmk_sender",
+                recipientKeyId: "dmk_recipient",
+                senderPublicKeyJwk: {
+                  kty: "EC",
+                  crv: "P-256",
+                  x: "abc",
+                  y: "def"
+                },
+                recipientPublicKeyJwk: {
+                  kty: "EC",
+                  crv: "P-256",
+                  x: "ghi",
+                  y: "jkl"
+                }
+              },
+              voiceNote: {
+                encryptedAudioBase64: oversizedEncryptedPayload,
+                mimeType: "audio/webm",
+                durationMs: 1200,
+                size: MAX_VOICE_NOTE_AUDIO_BYTES + 1,
+                waveform: [0.2, 0.5, 0.8]
+              }
+            }),
+          (error) => {
+            assert.equal(error?.code, "VOICE_NOTE_AUDIO_TOO_LARGE");
+            return true;
+          }
+        );
+
+        assert.equal(harness.getCreateCallCount(), 0);
       });
     }
   },

@@ -50,10 +50,96 @@ async function requireUser(userId, options = {}) {
   return user;
 }
 
-export function serializeUser(user) {
+function serializeDirectMessageKeyRecord(keyRecord, { includePrivateEncryption = false } = {}) {
+  if (!keyRecord) {
+    return null;
+  }
+
+  return {
+    version: keyRecord.version,
+    algorithm: keyRecord.algorithm,
+    keyId: keyRecord.keyId,
+    publicKeyJwk: keyRecord.publicKeyJwk,
+    ...(includePrivateEncryption
+      ? {
+          privateKeyEnvelope: keyRecord.privateKeyEnvelope
+        }
+      : {}),
+    updatedAt: keyRecord.updatedAt || null
+  };
+}
+
+function toDirectMessageKeyHistoryEntry(keyRecord, updatedAt = null) {
+  if (!keyRecord) {
+    return null;
+  }
+
+  return {
+    version: keyRecord.version,
+    algorithm: keyRecord.algorithm,
+    keyId: keyRecord.keyId,
+    publicKeyJwk: keyRecord.publicKeyJwk,
+    privateKeyEnvelope: keyRecord.privateKeyEnvelope,
+    updatedAt: updatedAt || keyRecord.updatedAt || null
+  };
+}
+
+function mergeDirectMessageEncryptionHistory(existingRecord, nextRecord) {
+  if (!nextRecord) {
+    return null;
+  }
+
+  const mergedPreviousKeys = [];
+  const seenKeyIds = new Set([nextRecord.keyId]);
+  const appendPreviousKey = (entry) => {
+    const normalizedEntry = toDirectMessageKeyHistoryEntry(entry);
+
+    if (!normalizedEntry || seenKeyIds.has(normalizedEntry.keyId)) {
+      return;
+    }
+
+    seenKeyIds.add(normalizedEntry.keyId);
+    mergedPreviousKeys.push(normalizedEntry);
+  };
+  const normalizedExistingRecord = normalizeDirectMessageEncryptionRecord(existingRecord);
+
+  nextRecord.previousKeys.forEach(appendPreviousKey);
+
+  if (normalizedExistingRecord) {
+    appendPreviousKey(
+      toDirectMessageKeyHistoryEntry(
+        normalizedExistingRecord,
+        existingRecord?.updatedAt || normalizedExistingRecord.updatedAt || null
+      )
+    );
+    normalizedExistingRecord.previousKeys.forEach(appendPreviousKey);
+  }
+
+  return {
+    ...nextRecord,
+    previousKeys: mergedPreviousKeys
+  };
+}
+
+export function serializeUser(user, options = {}) {
+  const includePrivateEncryption = options.includePrivateEncryption === true;
   const directMessageEncryption = normalizeDirectMessageEncryptionRecord(
     user.directMessageEncryption
   );
+  const serializedDirectMessageEncryption = directMessageEncryption
+    ? {
+        ...serializeDirectMessageKeyRecord(
+          {
+            ...directMessageEncryption,
+            updatedAt: user.directMessageEncryption?.updatedAt || null
+          },
+          { includePrivateEncryption }
+        ),
+        previousKeys: directMessageEncryption.previousKeys.map((entry) =>
+          serializeDirectMessageKeyRecord(entry, { includePrivateEncryption })
+        )
+      }
+    : null;
 
   return {
     id: String(user._id),
@@ -66,12 +152,7 @@ export function serializeUser(user) {
     },
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
-    directMessageEncryption: directMessageEncryption
-      ? {
-          ...directMessageEncryption,
-          updatedAt: user.directMessageEncryption?.updatedAt || null
-        }
-      : null,
+    directMessageEncryption: serializedDirectMessageEncryption,
     blockedUserIds: Array.isArray(user.blockedUserIds)
       ? user.blockedUserIds.map((value) => String(value))
       : [],
@@ -116,7 +197,9 @@ export async function getUserProfile(currentUserId, targetUserId) {
   ]);
 
   return {
-    user: serializeUser(targetUser),
+    user: serializeUser(targetUser, {
+      includePrivateEncryption: String(currentUser._id) === String(targetUser._id)
+    }),
     stats: {
       followerCount,
       followingCount: Array.isArray(targetUser.followingUserIds)
@@ -175,6 +258,12 @@ export async function updateUserProfile(userId, payload = {}) {
   const user = await requireUser(userId, { includePasswordHash: Boolean(wantsPasswordChange) });
   const previousPhoneNumber = user.phoneNumber;
   const previousAvatarUrl = user.avatarUrl || "";
+  const wantsDirectMessageEncryptionUpdate = payload.directMessageEncryption !== undefined;
+  const nextDirectMessageEncryption = wantsDirectMessageEncryptionUpdate
+    ? normalizeDirectMessageEncryptionRecord(payload.directMessageEncryption, {
+        requirePrivateKeyEnvelope: true
+      })
+    : null;
 
   const safeUsername =
     payload.username === undefined ? user.username : validateUsername(payload.username);
@@ -228,6 +317,14 @@ export async function updateUserProfile(userId, payload = {}) {
     });
   }
 
+  if (wantsDirectMessageEncryptionUpdate && !nextDirectMessageEncryption) {
+    throw new AppError("Direct-message encryption bundle is invalid.", {
+      statusCode: 400,
+      code: "DIRECT_MESSAGE_ENCRYPTION_INVALID",
+      field: "directMessageEncryption"
+    });
+  }
+
   if (wantsPasswordChange) {
     const currentPassword = validateCurrentPassword(payload.currentPassword);
     const passwordMatches = await bcrypt.compare(currentPassword, user.passwordHash);
@@ -245,6 +342,17 @@ export async function updateUserProfile(userId, payload = {}) {
       payload.confirmNewPassword
     );
 
+    if (user.directMessageEncryption && !nextDirectMessageEncryption) {
+      throw new AppError(
+        "Could not refresh your direct-message encryption key. Sign in again and try once more.",
+        {
+          statusCode: 400,
+          code: "DIRECT_MESSAGE_ENCRYPTION_REWRAP_REQUIRED",
+          field: "newPassword"
+        }
+      );
+    }
+
     user.passwordHash = await bcrypt.hash(safePassword, 12);
   }
 
@@ -259,13 +367,23 @@ export async function updateUserProfile(userId, payload = {}) {
     extension: safeExtension
   };
 
+  if (wantsDirectMessageEncryptionUpdate) {
+    user.directMessageEncryption = {
+      ...mergeDirectMessageEncryptionHistory(
+        user.directMessageEncryption,
+        nextDirectMessageEncryption
+      ),
+      updatedAt: new Date()
+    };
+  }
+
   await user.save();
 
   if (previousAvatarUrl && previousAvatarUrl !== safeAvatarUrl) {
     await deleteStoredAvatar(previousAvatarUrl);
   }
 
-  return serializeUser(user);
+  return serializeUser(user, { includePrivateEncryption: true });
 }
 
 export async function updateUserAvatar(userId, { fileBuffer, mimeType } = {}) {
@@ -289,7 +407,7 @@ export async function updateUserAvatar(userId, { fileBuffer, mimeType } = {}) {
     await deleteStoredAvatar(previousAvatarUrl);
   }
 
-  return serializeUser(user);
+  return serializeUser(user, { includePrivateEncryption: true });
 }
 
 export async function deleteUserAvatar(userId) {
@@ -297,14 +415,14 @@ export async function deleteUserAvatar(userId) {
   const previousAvatarUrl = user.avatarUrl || "";
 
   if (!previousAvatarUrl) {
-    return serializeUser(user);
+    return serializeUser(user, { includePrivateEncryption: true });
   }
 
   user.avatarUrl = "";
   await user.save();
   await deleteStoredAvatar(previousAvatarUrl);
 
-  return serializeUser(user);
+  return serializeUser(user, { includePrivateEncryption: true });
 }
 
 export async function setUserPreference(userId, key, enabled) {
@@ -321,12 +439,14 @@ export async function setUserPreference(userId, key, enabled) {
   user[key] = safeEnabled;
   await user.save();
 
-  return serializeUser(user);
+  return serializeUser(user, { includePrivateEncryption: true });
 }
 
 export async function updateDirectMessageEncryptionKey(userId, payload = {}) {
   const user = await requireUser(userId);
-  const encryptionRecord = normalizeDirectMessageEncryptionRecord(payload);
+  const encryptionRecord = normalizeDirectMessageEncryptionRecord(payload, {
+    requirePrivateKeyEnvelope: true
+  });
 
   if (!encryptionRecord) {
     throw new AppError("Direct-message encryption key is invalid.", {
@@ -337,12 +457,12 @@ export async function updateDirectMessageEncryptionKey(userId, payload = {}) {
   }
 
   user.directMessageEncryption = {
-    ...encryptionRecord,
+    ...mergeDirectMessageEncryptionHistory(user.directMessageEncryption, encryptionRecord),
     updatedAt: new Date()
   };
   await user.save();
 
-  return serializeUser(user);
+  return serializeUser(user, { includePrivateEncryption: true });
 }
 
 export async function followUser(currentUserId, targetUserId) {
@@ -381,7 +501,7 @@ export async function followUser(currentUserId, targetUserId) {
   }
 
   return {
-    user: serializeUser(currentUser),
+    user: serializeUser(currentUser, { includePrivateEncryption: true }),
     targetUserId: String(targetUser._id),
     following: true
   };
@@ -395,7 +515,7 @@ export async function unfollowUser(currentUserId, targetUserId) {
   await currentUser.save();
 
   return {
-    user: serializeUser(currentUser),
+    user: serializeUser(currentUser, { includePrivateEncryption: true }),
     targetUserId: String(targetUserId),
     following: false
   };
@@ -420,7 +540,7 @@ export async function blockUser(currentUserId, targetUserId) {
   }
 
   return {
-    user: serializeUser(currentUser),
+    user: serializeUser(currentUser, { includePrivateEncryption: true }),
     targetUserId: String(targetUser._id),
     blocked: true
   };
@@ -434,7 +554,7 @@ export async function unblockUser(currentUserId, targetUserId) {
   await currentUser.save();
 
   return {
-    user: serializeUser(currentUser),
+    user: serializeUser(currentUser, { includePrivateEncryption: true }),
     targetUserId: String(targetUserId),
     blocked: false
   };

@@ -54,7 +54,7 @@ export const login = asyncHandler(async (req, res) => {
 
 export const getCurrentUser = asyncHandler(async (req, res) => {
   res.status(200).json({
-    user: serializeUser(req.user)
+    user: serializeUser(req.user, { includePrivateEncryption: true })
   });
 });
 

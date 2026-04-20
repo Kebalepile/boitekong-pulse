@@ -45,6 +45,64 @@ function toIdString(value) {
   return value ? String(value) : "";
 }
 
+function toValidDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const nextDate = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(nextDate.getTime()) ? null : nextDate;
+}
+
+function getConversationClearCutoff(conversation, userId) {
+  if (!conversation || !userId || !Array.isArray(conversation.clearedByUsers)) {
+    return null;
+  }
+
+  const clearedByUser = conversation.clearedByUsers.find(
+    (entry) => toIdString(entry?.userId) === toIdString(userId)
+  );
+
+  return toValidDate(clearedByUser?.clearedAt);
+}
+
+function setConversationClearCutoff(conversation, userId, clearedAt = new Date()) {
+  if (!conversation || !userId) {
+    return;
+  }
+
+  const nextClearedAt = toValidDate(clearedAt) || new Date();
+  const clearedByUsers = Array.isArray(conversation.clearedByUsers)
+    ? [...conversation.clearedByUsers]
+    : [];
+  const existingIndex = clearedByUsers.findIndex(
+    (entry) => toIdString(entry?.userId) === toIdString(userId)
+  );
+  const nextEntry = {
+    userId,
+    clearedAt: nextClearedAt
+  };
+
+  if (existingIndex >= 0) {
+    clearedByUsers[existingIndex] = nextEntry;
+  } else {
+    clearedByUsers.push(nextEntry);
+  }
+
+  conversation.clearedByUsers = clearedByUsers;
+}
+
+function isMessageVisibleToUser(message, conversation, userId) {
+  const clearCutoff = getConversationClearCutoff(conversation, userId);
+
+  if (!clearCutoff) {
+    return true;
+  }
+
+  const createdAt = toValidDate(message?.createdAt);
+  return !createdAt || createdAt > clearCutoff;
+}
+
 function normalizeMessageText(text) {
   return String(text ?? "")
     .replace(/\r\n/g, "\n")
@@ -85,6 +143,10 @@ function normalizeReplyToMessageId(replyToMessageId) {
   return normalizedReplyToMessageId;
 }
 
+function normalizeForwardedState(isForwarded) {
+  return isForwarded === true;
+}
+
 function validateMessageInput({
   text = "",
   encryptedText = "",
@@ -94,10 +156,16 @@ function validateMessageInput({
 }) {
   const normalizedText = normalizeMessageText(text);
   const normalizedEncryptedText = normalizeEncryptedMessageText(encryptedText);
-  const normalizedEncryption = normalizedEncryptedText
+  const normalizedVoiceNote = normalizeVoiceNoteInput(voiceNote);
+  const hasEncryptedVoiceNote = Boolean(normalizedVoiceNote?.encryptedAudioBase64);
+  const hasPlainVoiceNote = Boolean(
+    normalizedVoiceNote?.audioData?.length ||
+      normalizedVoiceNote?.url ||
+      normalizedVoiceNote?.storageKey
+  );
+  const normalizedEncryption = (normalizedEncryptedText || hasEncryptedVoiceNote)
     ? normalizeMessageEncryptionPayload(encryption)
     : null;
-  const normalizedVoiceNote = normalizeVoiceNoteInput(voiceNote);
   const hasText = Boolean(normalizedText);
   const hasEncryptedText = Boolean(normalizedEncryptedText);
   const hasVoiceNote = Boolean(normalizedVoiceNote);
@@ -126,6 +194,14 @@ function validateMessageInput({
     });
   }
 
+  if (hasEncryptedVoiceNote && hasPlainVoiceNote) {
+    throw new AppError("Send a plaintext or encrypted voice note, not both.", {
+      statusCode: 400,
+      code: "MESSAGE_VOICE_NOTE_ENCRYPTION_MODE_INVALID",
+      field
+    });
+  }
+
   if (hasText && normalizedText.length > MAX_MESSAGE_TEXT_LENGTH) {
     throw new AppError(`Message text must be ${MAX_MESSAGE_TEXT_LENGTH} characters or fewer.`, {
       statusCode: 400,
@@ -150,10 +226,18 @@ function validateMessageInput({
     });
   }
 
+  if (hasEncryptedVoiceNote && !normalizedEncryption) {
+    throw new AppError("Encrypted voice note metadata is invalid.", {
+      statusCode: 400,
+      code: "VOICE_NOTE_ENCRYPTION_INVALID",
+      field
+    });
+  }
+
   return {
     text: hasText ? normalizedText : "",
     encryptedText: hasEncryptedText ? normalizedEncryptedText : "",
-    encryption: hasEncryptedText ? normalizedEncryption : null,
+    encryption: hasEncryptedText || hasEncryptedVoiceNote ? normalizedEncryption : null,
     voiceNote: normalizedVoiceNote
   };
 }
@@ -178,6 +262,8 @@ function getVoiceNoteSignature(voiceNote = null) {
 
   return JSON.stringify({
     audioData,
+    encryptedAudioBase64:
+      typeof voiceNote.encryptedAudioBase64 === "string" ? voiceNote.encryptedAudioBase64 : "",
     url: typeof voiceNote.url === "string" ? voiceNote.url : "",
     storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey : "",
     mimeType: typeof voiceNote.mimeType === "string" ? voiceNote.mimeType : "",
@@ -189,6 +275,7 @@ function getVoiceNoteSignature(voiceNote = null) {
 
 function getMessagePayloadSignature({
   replyToMessageId = "",
+  isForwarded = false,
   text = "",
   encryptedText = "",
   encryption = null,
@@ -196,6 +283,7 @@ function getMessagePayloadSignature({
 }) {
   return JSON.stringify({
     replyToMessageId: normalizeReplyToMessageId(toIdString(replyToMessageId)),
+    isForwarded: normalizeForwardedState(isForwarded),
     text: normalizeMessageText(text),
     encryptedText: normalizeEncryptedMessageText(encryptedText),
     encryption: encryption || null,
@@ -213,6 +301,7 @@ function serializeMessage(message) {
     conversationId: toIdString(message.conversationId),
     senderId: toIdString(message.senderId),
     replyToMessageId: toIdString(message.replyToMessageId),
+    isForwarded: message.isForwarded === true,
     text: message.text || "",
     encryptedText: message.encryptedText || "",
     encryption: message.encryption || null,
@@ -239,7 +328,7 @@ async function loadUsersMap(userIds) {
   return new Map(users.map((user) => [toIdString(user._id), user]));
 }
 
-async function serializeConversations(conversations) {
+async function serializeConversations(conversations, currentUserId = "") {
   const safeConversations = conversations.map((conversation) =>
     typeof conversation.toObject === "function" ? conversation.toObject() : conversation
   );
@@ -277,13 +366,20 @@ async function serializeConversations(conversations) {
   return safeConversations
     .map((conversation) => {
       const conversationId = toIdString(conversation._id);
-      const serializedMessages = (messagesByConversationId.get(conversationId) || []).map((message) =>
-        serializeMessage(message)
+      const visibleMessages = (messagesByConversationId.get(conversationId) || []).filter((message) =>
+        isMessageVisibleToUser(message, conversation, currentUserId)
       );
+      const serializedMessages = visibleMessages.map((message) => serializeMessage(message));
       const participantUsers = conversation.participantIds
         .map((participantId) => usersById.get(toIdString(participantId)) || null)
         .filter(Boolean)
         .map((user) => serializeUser(user));
+      const updatedAt =
+        visibleMessages[visibleMessages.length - 1]?.createdAt ||
+        conversation.updatedAt ||
+        getConversationClearCutoff(conversation, currentUserId) ||
+        conversation.lastMessageAt ||
+        conversation.createdAt;
 
       return {
         id: conversationId,
@@ -293,21 +389,21 @@ async function serializeConversations(conversations) {
           ? conversation.archivedByUserIds.map((participantId) => toIdString(participantId))
           : [],
         createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt || conversation.lastMessageAt || conversation.createdAt,
+        updatedAt,
         messages: serializedMessages
       };
     })
     .sort((first, second) => new Date(second.updatedAt) - new Date(first.updatedAt));
 }
 
-async function serializeSingleConversation(conversation) {
-  const [serializedConversation] = await serializeConversations([conversation]);
+async function serializeSingleConversation(conversation, currentUserId = "") {
+  const [serializedConversation] = await serializeConversations([conversation], currentUserId);
   return serializedConversation || null;
 }
 
-async function serializeLatestConversation(conversationId) {
+async function serializeLatestConversation(conversationId, currentUserId = "") {
   const latestConversation = await Conversation.findById(conversationId);
-  return latestConversation ? serializeSingleConversation(latestConversation) : null;
+  return latestConversation ? serializeSingleConversation(latestConversation, currentUserId) : null;
 }
 
 async function requireConversationForParticipant(conversationId, userId) {
@@ -475,12 +571,12 @@ export async function getConversationsForUser(currentUserId) {
     archivedByUserIds: { $ne: currentUserId }
   }).sort({ lastMessageAt: -1, updatedAt: -1 });
 
-  return serializeConversations(conversations);
+  return serializeConversations(conversations, currentUserId);
 }
 
 export async function getConversationById(currentUserId, conversationId) {
   const conversation = await requireConversationForParticipant(conversationId, currentUserId);
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function getOrCreateConversation({ currentUserId, targetUserId }) {
@@ -522,7 +618,7 @@ export async function getOrCreateConversation({ currentUserId, targetUserId }) {
     await conversation.save();
   }
 
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function sendMessage({
@@ -530,6 +626,7 @@ export async function sendMessage({
   conversationId,
   clientRequestId = "",
   replyToMessageId = "",
+  isForwarded = false,
   text = "",
   encryptedText = "",
   encryption = null,
@@ -555,12 +652,14 @@ export async function sendMessage({
     voiceNote
   });
   const safeClientRequestId = normalizeClientRequestId(clientRequestId);
+  const safeForwardedState = normalizeForwardedState(isForwarded);
   const replyTargetMessage = await requireReplyTargetMessage(
     conversation._id,
     replyToMessageId
   );
   const comparableMessage = {
     ...safeMessage,
+    isForwarded: safeForwardedState,
     replyToMessageId: toIdString(replyTargetMessage?._id)
   };
 
@@ -580,7 +679,7 @@ export async function sendMessage({
         });
       }
 
-      return serializeLatestConversation(conversation._id);
+      return serializeLatestConversation(conversation._id, currentUserId);
     }
   }
 
@@ -591,7 +690,7 @@ export async function sendMessage({
   });
 
   if (duplicateMessage) {
-    return serializeLatestConversation(conversation._id);
+    return serializeLatestConversation(conversation._id, currentUserId);
   }
 
   if (safeMessage.voiceNote) {
@@ -607,6 +706,7 @@ export async function sendMessage({
       senderId: currentUserId,
       clientRequestId: safeClientRequestId || null,
       replyToMessageId: replyTargetMessage?._id || null,
+      isForwarded: safeForwardedState,
       text: safeMessage.text,
       encryptedText: safeMessage.encryptedText,
       encryption: safeMessage.encryption,
@@ -635,7 +735,7 @@ export async function sendMessage({
           });
         }
 
-        return serializeLatestConversation(conversation._id);
+        return serializeLatestConversation(conversation._id, currentUserId);
       }
     }
 
@@ -656,7 +756,7 @@ export async function sendMessage({
 
   publishConversationUpdate(conversation, "message.created");
 
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function markConversationRead({ currentUserId, conversationId }) {
@@ -667,12 +767,13 @@ export async function markConversationRead({ currentUserId, conversationId }) {
   const now = new Date();
   const updates = messages.filter(
     (message) =>
+      isMessageVisibleToUser(message, conversation, currentUserId) &&
       toIdString(message.senderId) !== toIdString(currentUserId) &&
       !message.readBy.some((entry) => toIdString(entry.userId) === toIdString(currentUserId))
   );
 
   if (updates.length === 0) {
-    return serializeSingleConversation(conversation);
+    return serializeSingleConversation(conversation, currentUserId);
   }
 
   await Promise.all(
@@ -687,7 +788,7 @@ export async function markConversationRead({ currentUserId, conversationId }) {
 
   publishConversationUpdate(conversation, "conversation.read");
 
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function updateMessage({
@@ -727,7 +828,7 @@ export async function updateMessage({
 
   publishConversationUpdate(conversation, "message.updated");
 
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function deleteMessageForEveryone({
@@ -762,7 +863,7 @@ export async function deleteMessageForEveryone({
 
   publishConversationUpdate(conversation, "message.deleted");
 
-  return serializeSingleConversation(conversation);
+  return serializeSingleConversation(conversation, currentUserId);
 }
 
 export async function archiveSelectedConversationsForUser({
@@ -788,6 +889,12 @@ export async function archiveSelectedConversationsForUser({
         conversation.archivedByUserIds.push(currentUserId);
       }
 
+      setConversationClearCutoff(
+        conversation,
+        currentUserId,
+        conversation.lastMessageAt || new Date()
+      );
+
       return conversation.save();
     })
   );
@@ -805,6 +912,12 @@ export async function archiveAllConversationsForUser(currentUserId) {
       if (!conversation.archivedByUserIds.some((userId) => toIdString(userId) === toIdString(currentUserId))) {
         conversation.archivedByUserIds.push(currentUserId);
       }
+
+      setConversationClearCutoff(
+        conversation,
+        currentUserId,
+        conversation.lastMessageAt || new Date()
+      );
 
       return conversation.save();
     })

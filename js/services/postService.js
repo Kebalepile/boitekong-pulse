@@ -329,6 +329,23 @@ function syncCachedPosts(posts, { replace = false } = {}) {
   return mergedPosts;
 }
 
+function replaceCachedPostsForUser(userId, posts = []) {
+  const safeUserId = typeof userId === "string" ? userId.trim() : "";
+
+  if (!safeUserId) {
+    return syncCachedPosts(posts);
+  }
+
+  const normalizedPosts = normalizePostRecords(posts);
+  const nextPosts = [
+    ...getPosts().filter((post) => post.userId !== safeUserId),
+    ...normalizedPosts
+  ];
+
+  saveNormalizedPosts(nextPosts);
+  return sortPosts(normalizedPosts);
+}
+
 function removeCachedPost(postId) {
   const nextPosts = getPosts().filter((post) => post.id !== postId);
   saveNormalizedPosts(nextPosts);
@@ -428,7 +445,7 @@ export async function loadPostsByUserId(userId, { limit } = {}) {
     `/posts/user/${encodeURIComponent(userId)}${createQueryString({ limit })}`
   );
 
-  return syncCachedPosts(response.posts || []);
+  return replaceCachedPostsForUser(userId, response.posts || []);
 }
 
 export async function loadPostById(postId) {

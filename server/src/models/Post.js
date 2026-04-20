@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 import { locationSchema, reactionSchema, voiceNoteSchema } from "./shared.js";
 
 const { Schema } = mongoose;
@@ -69,4 +73,12 @@ postSchema.index(
   }
 );
 
-export const Post = mongoose.model("Post", postSchema);
+export let Post = createUnboundModelPlaceholder({
+  modelName: "Post",
+  collectionName: "posts"
+});
+
+export function bindPostModel(connection) {
+  Post = bindConnectionModel(connection, "Post", postSchema);
+  return Post;
+}

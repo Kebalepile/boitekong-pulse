@@ -64,6 +64,7 @@ import {
   createLoadMoreControl,
   preserveElementScrollPosition
 } from "../utils/listBatching.js";
+import { enableSensitiveMessagesShield } from "../utils/privacyShield.js";
 
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
 const MESSAGE_REPLY_SWIPE_TRIGGER_PX = 72;
@@ -75,7 +76,8 @@ const messagesUiState = {
 
 export async function renderMessages(app, currentUser, payload = null) {
   clearElement(app);
-  const shell = createElement("section", { className: "feed-shell" });
+  registerViewCleanup(enableSensitiveMessagesShield());
+  const shell = createElement("section", { className: "feed-shell messages-shell" });
   const navbar = createNavbar(currentUser, "messages");
   const main = createElement("main", { className: "feed-main messages-main" });
 
@@ -91,6 +93,7 @@ export async function renderMessages(app, currentUser, payload = null) {
   const activeConversationRecord = activeConversationId
     ? getConversationById(activeConversationId)
     : null;
+  shell.classList.toggle("messages-shell-thread-open", Boolean(activeConversationRecord));
   const layout = createElement("section", {
     className: `messages-layout${activeConversationRecord ? " messages-layout-thread-open" : ""}`
   });
@@ -152,6 +155,45 @@ export async function renderMessages(app, currentUser, payload = null) {
       conversationPanel.refresh(nextActiveConversation);
     })
   );
+
+  return getNormalizedMessagesRouteState({
+    payload,
+    activeConversationId,
+    editingMessageId
+  });
+}
+
+function getNormalizedMessagesRouteState({
+  payload,
+  activeConversationId,
+  editingMessageId = ""
+}) {
+  const targetUserId = typeof payload?.userId === "string" ? payload.userId.trim() : "";
+
+  if (!targetUserId || !activeConversationId) {
+    return null;
+  }
+
+  const nextPayload = {
+    conversationId: activeConversationId
+  };
+
+  if (editingMessageId) {
+    nextPayload.editingMessageId = editingMessageId;
+  }
+
+  return {
+    routeName: "messages",
+    payload: nextPayload
+  };
+}
+
+function isMessageSwipeReplyEnabled() {
+  if (typeof window === "undefined") {
+    return true;
+  }
+
+  return typeof window.PointerEvent === "function";
 }
 
 function createMessagesLoadingSkeleton() {
@@ -404,7 +446,7 @@ function createConversationListCard({
 
     showConfirmDialog({
       title: "Delete selected chats?",
-      message: "They will be removed from your inbox on this device.",
+      message: "They will be deleted for you. Messaging again will start a fresh conversation.",
       confirmText: "Delete",
       danger: true,
       onConfirm: async () => {
@@ -440,7 +482,7 @@ function createConversationListCard({
 
     showConfirmDialog({
       title: "Delete all chats?",
-      message: "This clears your inbox archive on this device.",
+      message: "This deletes your current chat history. New messages will start fresh conversations.",
       confirmText: "Delete all",
       danger: true,
       onConfirm: async () => {
@@ -803,6 +845,53 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   });
   submitBtn.appendChild(createSendIcon());
   const baseInputPlaceholder = otherUser ? `Message @${otherUser.username}` : "Write a message";
+  const mobileComposerMediaQuery =
+    typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 879px)") : null;
+  let mobileComposerLayoutFrameId = 0;
+  const syncMobileComposerLayout = () => {
+    const isMobileViewport = mobileComposerMediaQuery
+      ? mobileComposerMediaQuery.matches
+      : window.innerWidth <= 879;
+
+    if (!isMobileViewport) {
+      card.style.removeProperty("--messages-mobile-composer-height");
+      return;
+    }
+
+    const composerHeight = Math.ceil(composer.getBoundingClientRect().height || 0);
+
+    if (composerHeight > 0) {
+      card.style.setProperty("--messages-mobile-composer-height", `${composerHeight}px`);
+    }
+  };
+  const queueMobileComposerLayoutSync = () => {
+    window.cancelAnimationFrame(mobileComposerLayoutFrameId);
+    mobileComposerLayoutFrameId = window.requestAnimationFrame(() => {
+      mobileComposerLayoutFrameId = 0;
+      syncMobileComposerLayout();
+    });
+  };
+  const getComposerPlaceholder = (voiceState = null) => {
+    const nextVoiceState = voiceState || voiceComposer?.getState?.() || {
+      active: false,
+      hasDraft: false,
+      isRecording: false
+    };
+
+    if (!availabilityState.allowed) {
+      return availabilityState.message;
+    }
+
+    if (nextVoiceState.isRecording) {
+      return "Recording voice note...";
+    }
+
+    if (nextVoiceState.hasDraft) {
+      return "Voice note ready to send";
+    }
+
+    return baseInputPlaceholder;
+  };
   const setComposerBusyState = (nextBusy) => {
     isSending = Boolean(nextBusy);
     composer.classList.toggle("messages-composer-busy", isSending);
@@ -832,13 +921,11 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
 
           composer.classList.toggle("messages-composer-voice-active", active);
           input.disabled = isSending || !availabilityState.allowed || active;
-          input.placeholder = !availabilityState.allowed
-            ? availabilityState.message
-            : isRecording
-              ? "Recording voice note..."
-              : hasDraft
-                ? "Voice note ready to send"
-                : baseInputPlaceholder;
+          input.placeholder = getComposerPlaceholder({
+            active,
+            hasDraft,
+            isRecording
+          });
           submitBtn.disabled =
             isSending ||
             !availabilityState.allowed ||
@@ -920,7 +1007,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
           onSelect: () => {
             showConfirmDialog({
               title: "Delete this chat?",
-              message: "It will be removed from your inbox on this device.",
+              message: "It will be deleted for you. Messaging again will start a fresh conversation.",
               confirmText: "Delete",
               danger: true,
               onConfirm: async () => {
@@ -943,6 +1030,31 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
         }
       ]
     });
+  });
+  const composerResizeObserver =
+    typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+          queueMobileComposerLayoutSync();
+        })
+      : null;
+  composerResizeObserver?.observe(composer);
+  window.addEventListener("resize", queueMobileComposerLayoutSync);
+  window.visualViewport?.addEventListener("resize", queueMobileComposerLayoutSync);
+  if (mobileComposerMediaQuery?.addEventListener) {
+    mobileComposerMediaQuery.addEventListener("change", queueMobileComposerLayoutSync);
+  } else if (mobileComposerMediaQuery?.addListener) {
+    mobileComposerMediaQuery.addListener(queueMobileComposerLayoutSync);
+  }
+  registerViewCleanup(() => {
+    window.cancelAnimationFrame(mobileComposerLayoutFrameId);
+    composerResizeObserver?.disconnect();
+    window.removeEventListener("resize", queueMobileComposerLayoutSync);
+    window.visualViewport?.removeEventListener("resize", queueMobileComposerLayoutSync);
+    if (mobileComposerMediaQuery?.removeEventListener) {
+      mobileComposerMediaQuery.removeEventListener("change", queueMobileComposerLayoutSync);
+    } else if (mobileComposerMediaQuery?.removeListener) {
+      mobileComposerMediaQuery.removeListener(queueMobileComposerLayoutSync);
+    }
   });
 
   const getMessageById = (messageId) =>
@@ -1020,6 +1132,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   const syncReplyComposer = () => {
     clearElement(replyComposer);
     replyComposer.hidden = true;
+    queueMobileComposerLayoutSync();
 
     if (!replyingToMessageIdState || editingMessageIdState) {
       return;
@@ -1067,6 +1180,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
     shell.append(copy, dismissBtn);
     replyComposer.appendChild(shell);
     replyComposer.hidden = false;
+    queueMobileComposerLayoutSync();
 
     dismissBtn.addEventListener("click", () => {
       replyingToMessageIdState = "";
@@ -1207,13 +1321,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
     };
 
     input.disabled = isSending || !availabilityState.allowed || voiceState.active;
-    input.placeholder = !availabilityState.allowed
-      ? availabilityState.message
-      : voiceState.isRecording
-        ? "Recording voice note..."
-        : voiceState.hasDraft
-          ? "Voice note ready to send"
-          : baseInputPlaceholder;
+    input.placeholder = getComposerPlaceholder(voiceState);
     submitBtn.disabled =
       isSending ||
       !availabilityState.allowed ||
@@ -1223,6 +1331,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
       "messages-send-btn-voice",
       !isSending && voiceState.hasDraft && !voiceState.isRecording
     );
+    queueMobileComposerLayoutSync();
   };
 
   const syncAvailabilityState = () => {
@@ -1326,12 +1435,7 @@ function createConversationPanel({ currentUser, conversation, editingMessageId }
   body.append(messages, composer);
   card.append(header, body);
   renderMessagesList({ stickToBottom: true });
-
-  requestAnimationFrame(() => {
-    if (!editingMessageIdState) {
-      input.focus({ preventScroll: true });
-    }
-  });
+  queueMobileComposerLayoutSync();
 
   return {
     element: card,
@@ -1414,6 +1518,13 @@ function createMessageBubble({
   const isOwnMessage = message.senderId === currentUser.id;
   const isVoiceMessage =
     Boolean(getVoiceNoteSource(message.voiceNote)) || isVoiceNotePendingSync(message.voiceNote);
+  const swipeReplyEnabled = isMessageSwipeReplyEnabled();
+  const forwardedIndicator = !message.deletedForEveryone && message.isForwarded
+    ? createElement("span", {
+        className: "messages-bubble-forwarded",
+        text: "Forwarded"
+      })
+    : null;
   const stack = createElement("div", {
     className: `messages-bubble-stack${isOwnMessage ? " messages-bubble-stack-own" : ""}`,
     attributes: {
@@ -1425,7 +1536,9 @@ function createMessageBubble({
       message.deletedForEveryone ? " messages-bubble-deleted" : ""
     }${isVoiceMessage ? " messages-bubble-voice" : ""}${
       isVoiceMessage && isOwnMessage ? " messages-bubble-voice-own" : ""
-    }${!message.deletedForEveryone ? " messages-bubble-swipeable" : ""}`
+    }${
+      !message.deletedForEveryone && swipeReplyEnabled ? " messages-bubble-swipeable" : ""
+    }`
   });
   const swipeIndicator = createElement("div", {
     className: `messages-swipe-reply-indicator${
@@ -1440,7 +1553,7 @@ function createMessageBubble({
     })
   );
 
-  const createOwnMenuButton = () => {
+  const createMessageMenuButton = () => {
     const menuBtn = createElement("button", {
       className: `messages-bubble-menu-btn${isVoiceMessage ? " messages-bubble-menu-btn-voice" : ""}`,
       type: "button",
@@ -1461,7 +1574,22 @@ function createMessageBubble({
         }
       ];
 
+      if (canForwardMessage(message)) {
+        actions.push({
+          label: "Forward",
+          iconName: "share",
+          onSelect: async () => {
+            await showForwardMessageSheet({
+              currentUser,
+              sourceConversationId: conversationId,
+              message
+            });
+          }
+        });
+      }
+
       if (
+        isOwnMessage &&
         canEditMessage({ message, userId: currentUser.id }) &&
         !getVoiceNoteSource(message.voiceNote) &&
         !isVoiceNotePendingSync(message.voiceNote)
@@ -1474,29 +1602,31 @@ function createMessageBubble({
         });
       }
 
-      actions.push({
-        label: "Delete for everyone",
-        danger: true,
-        onSelect: () => {
-          showConfirmDialog({
-            title: "Delete this message?",
-            message: "Everyone in this chat will see that you deleted it.",
-            confirmText: "Delete",
-            danger: true,
-            onConfirm: async () => {
-              try {
-                const updatedConversation = await deleteMessageForEveryone({
-                  conversationId,
-                  messageId: message.id
-                });
-                onMessageDeleted(updatedConversation);
-              } catch (error) {
-                showToast(error.message || "Could not delete that message.", "error");
+      if (isOwnMessage) {
+        actions.push({
+          label: "Delete for everyone",
+          danger: true,
+          onSelect: () => {
+            showConfirmDialog({
+              title: "Delete this message?",
+              message: "Everyone in this chat will see that you deleted it.",
+              confirmText: "Delete",
+              danger: true,
+              onConfirm: async () => {
+                try {
+                  const updatedConversation = await deleteMessageForEveryone({
+                    conversationId,
+                    messageId: message.id
+                  });
+                  onMessageDeleted(updatedConversation);
+                } catch (error) {
+                  showToast(error.message || "Could not delete that message.", "error");
+                }
               }
-            }
-          });
-        }
-      });
+            });
+          }
+        });
+      }
 
       showActionSheet({
         title: "Message",
@@ -1505,6 +1635,16 @@ function createMessageBubble({
     });
 
     return menuBtn;
+  };
+  const attachVoiceBubbleMenu = (targetBlock) => {
+    if (!targetBlock || message.deletedForEveryone) {
+      return targetBlock;
+    }
+
+    const menuBtn = createMessageMenuButton();
+    menuBtn.classList.add("messages-bubble-menu-btn-voice-card");
+    targetBlock.appendChild(menuBtn);
+    return targetBlock;
   };
 
   if (
@@ -1538,12 +1678,16 @@ function createMessageBubble({
     header.appendChild(meta);
   }
 
-  if (isOwnMessage && !message.deletedForEveryone) {
-    header.appendChild(createOwnMenuButton());
+  if (!message.deletedForEveryone) {
+    header.appendChild(createMessageMenuButton());
   }
 
   if (!isVoiceMessage) {
     bubble.appendChild(header);
+  }
+
+  if (forwardedIndicator) {
+    bubble.appendChild(forwardedIndicator);
   }
 
   if (!message.deletedForEveryone && message.replyToMessageId) {
@@ -1573,29 +1717,25 @@ function createMessageBubble({
       })
     );
   } else if (getVoiceNoteSource(message.voiceNote)) {
-    if (isOwnMessage) {
-      bubble.appendChild(createOwnMenuButton());
-    }
-
     bubble.appendChild(
-      createMessageVoiceNotePlayer({
-        voiceNote: message.voiceNote,
-        speakerUser: isOwnMessage ? currentUser : otherUser,
-        isOwnMessage,
-        metaText: formatMessageTimestamp(message.createdAt)
-      })
+      attachVoiceBubbleMenu(
+        createMessageVoiceNotePlayer({
+          voiceNote: message.voiceNote,
+          speakerUser: isOwnMessage ? currentUser : otherUser,
+          isOwnMessage,
+          metaText: formatMessageTimestamp(message.createdAt)
+        })
+      )
     );
   } else if (isVoiceNotePendingSync(message.voiceNote)) {
-    if (isOwnMessage) {
-      bubble.appendChild(createOwnMenuButton());
-    }
-
     bubble.appendChild(
-      createMessageVoiceNotePendingState({
-        voiceNote: message.voiceNote,
-        isOwnMessage,
-        metaText: formatMessageTimestamp(message.createdAt)
-      })
+      attachVoiceBubbleMenu(
+        createMessageVoiceNotePendingState({
+          voiceNote: message.voiceNote,
+          isOwnMessage,
+          metaText: formatMessageTimestamp(message.createdAt)
+        })
+      )
     );
   } else {
     bubble.appendChild(
@@ -1607,13 +1747,15 @@ function createMessageBubble({
   }
 
   stack.appendChild(bubble);
-  enableMessageSwipeReply({
-    stack,
-    swipeSurface: bubble,
-    messageId: message.id,
-    isOwnMessage,
-    onReply
-  });
+  if (swipeReplyEnabled) {
+    enableMessageSwipeReply({
+      stack,
+      swipeSurface: bubble,
+      messageId: message.id,
+      isOwnMessage,
+      onReply
+    });
+  }
 
   if (isOwnMessage && seenUser) {
     const seenIndicator = createElement("div", {
@@ -1635,6 +1777,145 @@ function createMessageBubble({
   }
 
   return stack;
+}
+
+function canForwardMessage(message) {
+  if (!message || message.deletedForEveryone) {
+    return false;
+  }
+
+  if (hasForwardableVoiceNote(message.voiceNote)) {
+    return true;
+  }
+
+  return typeof message.text === "string" && message.text.trim().length > 0;
+}
+
+function hasForwardableVoiceNote(voiceNote) {
+  if (!voiceNote) {
+    return false;
+  }
+
+  if (getVoiceNoteSource(voiceNote)) {
+    return true;
+  }
+
+  return (
+    (typeof voiceNote.audioBase64 === "string" && voiceNote.audioBase64.trim().length > 0) ||
+    (typeof voiceNote.encryptedAudioBase64 === "string" &&
+      voiceNote.encryptedAudioBase64.trim().length > 0) ||
+    (typeof voiceNote.url === "string" && voiceNote.url.trim().length > 0)
+  );
+}
+
+function getForwardMessagePayload(message) {
+  if (!canForwardMessage(message)) {
+    return null;
+  }
+
+  if (hasForwardableVoiceNote(message.voiceNote)) {
+    return {
+      text: "",
+      voiceNote: message.voiceNote
+    };
+  }
+
+  return {
+    text: message.text.trim(),
+    voiceNote: null
+  };
+}
+
+function buildForwardTargets({ currentUserId, sourceConversationId }) {
+  const recentTargets = getConversationsForUser(currentUserId)
+    .filter((conversation) => conversation.id !== sourceConversationId)
+    .map((conversation) => {
+      const user = getConversationPartner(conversation, currentUserId);
+
+      if (!user?.id) {
+        return null;
+      }
+
+      return {
+        userId: user.id,
+        conversationId: conversation.id,
+        user,
+        username: user.username || "Unknown",
+        label: `@${user.username || "unknown"}`
+      };
+    })
+    .filter(Boolean);
+
+  const targetIds = new Set(recentTargets.map((target) => target.userId));
+  const suggestedUsers = getUsers()
+    .filter((user) => user?.id && user.id !== currentUserId && !targetIds.has(user.id))
+    .slice(0, 8)
+    .map((user) => ({
+      userId: user.id,
+      conversationId: "",
+      user,
+      username: user.username || "Unknown",
+      label: `@${user.username || "unknown"}`
+    }));
+
+  return [...recentTargets.slice(0, 8), ...suggestedUsers].slice(0, 12);
+}
+
+async function showForwardMessageSheet({
+  currentUser,
+  sourceConversationId,
+  message
+}) {
+  const payload = getForwardMessagePayload(message);
+
+  if (!payload) {
+    showToast("That message cannot be forwarded right now.", "error");
+    return;
+  }
+
+  const targets = buildForwardTargets({
+    currentUserId: currentUser.id,
+    sourceConversationId
+  });
+
+  if (targets.length === 0) {
+    showToast("No chats are ready for forwarding yet.", "error");
+    return;
+  }
+
+  showActionSheet({
+    title: "Forward to",
+    actions: targets.map((target) => ({
+      label: target.label,
+      avatarUser: target.user,
+      onSelect: async () => {
+        try {
+          const targetConversation = target.conversationId
+            ? getConversationById(target.conversationId)
+            : await getOrCreateConversation({
+                currentUserId: currentUser.id,
+                targetUserId: target.userId
+              });
+
+          if (!targetConversation?.id) {
+            throw new Error("Could not open that conversation.");
+          }
+
+          await sendMessage({
+            conversationId: targetConversation.id,
+            clientRequestId: crypto.randomUUID(),
+            text: payload.text,
+            voiceNote: payload.voiceNote,
+            isForwarded: true
+          });
+
+          showToast(`Forwarded to @${target.username}.`, "success");
+        } catch (error) {
+          showToast(error.message || "Could not forward that message.", "error");
+        }
+      }
+    }))
+  });
 }
 
 function createReplyReference({
@@ -1703,54 +1984,9 @@ function enableMessageSwipeReply({
   let startY = 0;
   let trackingSwipe = false;
   let horizontalSwipeLocked = false;
+  let swipeListenersAttached = false;
 
-  const resetSwipe = () => {
-    stack.style.setProperty("--messages-swipe-offset", "0px");
-    stack.classList.remove("messages-bubble-stack-swiping");
-    stack.classList.remove("messages-bubble-stack-ready");
-
-    if (
-      activePointerId !== null &&
-      typeof swipeSurface.hasPointerCapture === "function" &&
-      swipeSurface.hasPointerCapture(activePointerId)
-    ) {
-      swipeSurface.releasePointerCapture(activePointerId);
-    }
-
-    activePointerId = null;
-    startX = 0;
-    startY = 0;
-    trackingSwipe = false;
-    horizontalSwipeLocked = false;
-  };
-
-  const shouldIgnoreSwipeTarget = (target) =>
-    target instanceof Element &&
-    Boolean(
-      target.closest(
-        "button, input, textarea, select, a, [role='button'], [role='link'], .voice-note-meter-seekable"
-      )
-    );
-
-  swipeSurface.addEventListener("pointerdown", (event) => {
-    if (event.button !== undefined && event.button !== 0) {
-      return;
-    }
-
-    if (shouldIgnoreSwipeTarget(event.target)) {
-      return;
-    }
-
-    activePointerId = event.pointerId;
-    startX = event.clientX;
-    startY = event.clientY;
-    trackingSwipe = true;
-    horizontalSwipeLocked = false;
-    stack.style.setProperty("--messages-swipe-offset", "0px");
-    swipeSurface.setPointerCapture?.(event.pointerId);
-  });
-
-  swipeSurface.addEventListener("pointermove", (event) => {
+  const handlePointerMove = (event) => {
     if (!trackingSwipe || event.pointerId !== activePointerId) {
       return;
     }
@@ -1787,6 +2023,67 @@ function enableMessageSwipeReply({
       "messages-bubble-stack-ready",
       directedDelta >= MESSAGE_REPLY_SWIPE_TRIGGER_PX
     );
+  };
+
+  const removeSwipeListeners = () => {
+    if (!swipeListenersAttached) {
+      return;
+    }
+
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", finishSwipe);
+    window.removeEventListener("pointercancel", resetSwipe);
+    swipeListenersAttached = false;
+  };
+
+  const addSwipeListeners = () => {
+    if (swipeListenersAttached) {
+      return;
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishSwipe);
+    window.addEventListener("pointercancel", resetSwipe);
+    swipeListenersAttached = true;
+  };
+
+  const resetSwipe = () => {
+    removeSwipeListeners();
+    stack.style.setProperty("--messages-swipe-offset", "0px");
+    stack.classList.remove("messages-bubble-stack-swiping");
+    stack.classList.remove("messages-bubble-stack-ready");
+
+    activePointerId = null;
+    startX = 0;
+    startY = 0;
+    trackingSwipe = false;
+    horizontalSwipeLocked = false;
+  };
+
+  const shouldIgnoreSwipeTarget = (target) =>
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        "button, input, textarea, select, a, [role='button'], [role='link'], .voice-note-meter-seekable"
+      )
+    );
+
+  swipeSurface.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+
+    if (shouldIgnoreSwipeTarget(event.target)) {
+      return;
+    }
+
+    activePointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    trackingSwipe = true;
+    horizontalSwipeLocked = false;
+    stack.style.setProperty("--messages-swipe-offset", "0px");
+    addSwipeListeners();
   });
 
   const finishSwipe = (event) => {
@@ -1804,10 +2101,6 @@ function enableMessageSwipeReply({
       onReply(messageId);
     }
   };
-
-  swipeSurface.addEventListener("pointerup", finishSwipe);
-  swipeSurface.addEventListener("pointercancel", resetSwipe);
-  swipeSurface.addEventListener("lostpointercapture", resetSwipe);
 }
 
 function createMessageEditForm({ conversationId, message, onCancel = () => {}, onSave = () => {} }) {

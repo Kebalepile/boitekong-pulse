@@ -328,6 +328,14 @@ export function renderCreatePost(app, currentUser) {
         throw pendingImageError;
       }
 
+      if (imageField.hasPreviewError()) {
+        const invalidImageError = new Error(
+          "That image could not be previewed. Choose another image or remove it first."
+        );
+        invalidImageError.field = "image";
+        throw invalidImageError;
+      }
+
       const postPayload =
         submissionMode === "voice"
           ? validatePostSubmission({

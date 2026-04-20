@@ -6,21 +6,36 @@
   "lang": "en-ZA",
   "start_url": "./index.html",
   "scope": "./",
+  "display_override": ["standalone", "minimal-ui", "browser"],
   "display": "standalone",
+  "orientation": "portrait",
+  "prefer_related_applications": false,
   "background_color": "#eef4fb",
   "theme_color": "#1d4ed8",
   "icons": [
     {
-      "src": "assets/pwa-icon-192.png",
+      "src": "assets/pwa-icon-192.png?v=20260419-2",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "assets/pwa-icon-512.png",
+      "src": "assets/pwa-icon-192.png?v=20260419-2",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "assets/pwa-icon-512.png?v=20260419-2",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "assets/pwa-icon-512.png?v=20260419-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

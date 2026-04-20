@@ -1,9 +1,13 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 import { locationSchema } from "./shared.js";
 
 const { Schema } = mongoose;
 
-const directMessageEncryptionSchema = new Schema(
+const directMessagePrivateKeyEnvelopeSchema = new Schema(
   {
     version: {
       type: String,
@@ -13,17 +17,65 @@ const directMessageEncryptionSchema = new Schema(
       type: String,
       default: ""
     },
-    keyId: {
+    ciphertext: {
       type: String,
       default: ""
     },
-    publicKeyJwk: {
-      type: Schema.Types.Mixed,
-      default: null
+    iv: {
+      type: String,
+      default: ""
     },
-    updatedAt: {
-      type: Date,
-      default: null
+    salt: {
+      type: String,
+      default: ""
+    },
+    iterations: {
+      type: Number,
+      default: 0
+    }
+  },
+  {
+    _id: false
+  }
+);
+
+const directMessageKeyRecordShape = {
+  version: {
+    type: String,
+    default: ""
+  },
+  algorithm: {
+    type: String,
+    default: ""
+  },
+  keyId: {
+    type: String,
+    default: ""
+  },
+  publicKeyJwk: {
+    type: Schema.Types.Mixed,
+    default: null
+  },
+  privateKeyEnvelope: {
+    type: directMessagePrivateKeyEnvelopeSchema,
+    default: null
+  },
+  updatedAt: {
+    type: Date,
+    default: null
+  }
+};
+
+const directMessageKeyRecordSchema = new Schema(directMessageKeyRecordShape, {
+  _id: false
+});
+
+const directMessageEncryptionSchema = new Schema(
+  {
+    ...directMessageKeyRecordShape,
+    previousKeys: {
+      type: [directMessageKeyRecordSchema],
+      default: []
     }
   },
   {
@@ -112,4 +164,12 @@ const userSchema = new Schema(
   }
 );
 
-export const User = mongoose.model("User", userSchema);
+export let User = createUnboundModelPlaceholder({
+  modelName: "User",
+  collectionName: "users"
+});
+
+export function bindUserModel(connection) {
+  User = bindConnectionModel(connection, "User", userSchema);
+  return User;
+}

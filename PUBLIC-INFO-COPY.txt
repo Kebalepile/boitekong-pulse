@@ -1,0 +1,78 @@
+BOITEKONG PULSE - PUBLIC INFO COPY
+Source: js/views/publicInfoView.js
+Date captured: 2026-04-16
+
+ABOUT
+Eyebrow: About
+Title: Built for township conversations that feel close to home
+Intro:
+Boitekong Pulse is a mobile-first local community app for posts, replies, direct messages, and voice-note conversations that stay grounded in place.
+
+Section: What the product is for
+- The app is designed to help neighbors share updates quickly, find relevant posts nearby, and keep community conversation readable on mobile.
+- It focuses on township-first interactions instead of trying to behave like a broad social network with too much noise.
+
+Section: What matters in the product
+- Fast posting, clear threads, direct messaging, and simple notification flows are the core experience.
+- The product direction favors practical local communication over vanity features.
+
+
+HELP
+Eyebrow: Help
+Title: Quick help for using Boitekong Pulse
+Intro:
+Here are the main things people usually need help with when getting started.
+
+Section: Getting started
+- Create an account, verify your phone number, then open the feed to browse local posts or create your own update.
+- Use the search entry in the top bar to look for people or posts, and use the messages area for direct conversations.
+
+Section: Common actions
+- You can react to posts, open comments, reply in DMs by swiping a message, and manage notifications from the bell menu.
+- If something seems stuck, refresh the screen and try again. If the issue keeps happening, use the contact page to reach out.
+
+
+PRIVACY
+Eyebrow: Privacy
+Title: Privacy principles for Boitekong Pulse
+Intro:
+This page gives a simple product-level explanation of what privacy should mean in the app.
+
+Section: Data expectations
+- Account details and app activity should only be used to operate the product, secure the platform, and support community features.
+- Direct message content and notification data should be handled carefully and never exposed more broadly than needed for the feature.
+
+Section: Product stance
+- The app should stay transparent about what information is visible to other users and what remains account-specific.
+- As the platform grows, this page can later be replaced by a fuller legal privacy policy without changing the public route.
+
+
+TERMS & CONDITIONS
+Eyebrow: Terms
+Title: Simple terms for participating in the community
+Intro:
+These are product-facing expectations for using the platform responsibly.
+
+Section: Community use
+- Users should post lawful content, avoid harassment, avoid impersonation, and avoid uploading misleading or harmful material.
+- Accounts that abuse messaging, spam local feeds, or repeatedly violate community expectations can be limited or removed.
+
+Section: Platform boundaries
+- Features, availability, and moderation approaches may evolve as the product improves.
+- A fuller legal terms document can later replace this page while keeping the same public entry point.
+
+
+CONTACT
+Eyebrow: Contact
+Title: Ways to reach Boitekong Pulse
+Intro:
+Use the contact options below for support, feedback, or product questions.
+
+Contact details
+- Email: kmotshoana@gmail.com
+- GitHub: https://github.com/Kebalepile
+- Phone: 069 848 8813
+
+Section: Best use of contact
+- Use email for feedback, bug reports, or product questions.
+- GitHub is useful when sharing technical context, reproducible steps, or code-related issues.

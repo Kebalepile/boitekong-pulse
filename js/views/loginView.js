@@ -3,7 +3,7 @@ import {
   requestPasswordResetOtp,
   resetPasswordWithOtp
 } from "../services/authService.js";
-import { navigate } from "../router.js";
+import { navigate, navigateAfterAuthentication } from "../router.js";
 import {
   clearElement,
   createElement,
@@ -307,7 +307,7 @@ export function renderLogin(app) {
         title: "Welcome back",
         message: "Getting your local feed ready..."
       });
-      await navigate("feed", null, {
+      await navigateAfterAuthentication({
         skipTransition: true
       });
     } catch (error) {

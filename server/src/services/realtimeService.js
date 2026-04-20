@@ -1,14 +1,73 @@
 import { createHash } from "node:crypto";
+import { env } from "../config/env.js";
 import { User } from "../models/User.js";
 import { verifyAccessToken } from "../utils/token.js";
+import { createFixedWindowRateLimiter } from "../utils/rateLimiter.js";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const realtimeUpgradeIpLimiter = createFixedWindowRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30
+});
 const userConnections = new Map();
 const allConnections = new Set();
 const socketState = new WeakMap();
 
 function trimString(value) {
-  return typeof value === "string" ? value.trim() : "";
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  return typeof rawValue === "string" ? rawValue.trim() : "";
+}
+
+function normalizeOrigin(origin = "") {
+  try {
+    const parsed = new URL(origin);
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
+function shouldTrustForwardedHeaders() {
+  if (env.trustProxy === false || env.trustProxy === 0) {
+    return false;
+  }
+
+  if (typeof env.trustProxy === "string") {
+    const normalizedValue = env.trustProxy.trim().toLowerCase();
+    return normalizedValue !== "false" && normalizedValue !== "0";
+  }
+
+  return true;
+}
+
+function resolveUpgradeClientIp(request) {
+  if (shouldTrustForwardedHeaders()) {
+    const forwardedFor = trimString(request?.headers?.["x-forwarded-for"]);
+
+    if (forwardedFor) {
+      return trimString(forwardedFor.split(",")[0]).toLowerCase();
+    }
+  }
+
+  return trimString(request?.socket?.remoteAddress || request?.headers?.["x-real-ip"]).toLowerCase();
+}
+
+function hasRestrictedOrigins() {
+  return env.corsOrigins.length > 0 && !env.corsOrigins.includes("*");
+}
+
+function isRealtimeOriginAllowed(origin) {
+  if (!hasRestrictedOrigins()) {
+    return true;
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin || "");
+  return Boolean(normalizedOrigin) && env.corsOrigins.includes(normalizedOrigin);
 }
 
 function createWebSocketAccept(key) {
@@ -17,13 +76,21 @@ function createWebSocketAccept(key) {
     .digest("base64");
 }
 
-function writeHttpError(socket, statusCode, statusText) {
+function writeHttpError(socket, statusCode, statusText, headers = {}) {
   if (socket.destroyed) {
     return;
   }
 
+  const headerLines = Object.entries(headers).map(([key, value]) => `${key}: ${value}`);
+
   socket.write(
-    `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`
+    [
+      `HTTP/1.1 ${statusCode} ${statusText}`,
+      "Connection: close",
+      "Content-Length: 0",
+      ...headerLines,
+      "\r\n"
+    ].join("\r\n")
   );
   socket.destroy();
 }
@@ -248,6 +315,48 @@ async function authenticateUpgradeRequest(request) {
     };
   }
 
+  const upgradeHeader = trimString(request.headers.upgrade).toLowerCase();
+
+  if (upgradeHeader !== "websocket") {
+    return {
+      ok: false,
+      statusCode: 400,
+      statusText: "Bad Request"
+    };
+  }
+
+  const websocketVersion = trimString(request.headers["sec-websocket-version"]);
+
+  if (websocketVersion && websocketVersion !== "13") {
+    return {
+      ok: false,
+      statusCode: 400,
+      statusText: "Bad Request"
+    };
+  }
+
+  if (!isRealtimeOriginAllowed(request.headers.origin)) {
+    return {
+      ok: false,
+      statusCode: 403,
+      statusText: "Forbidden"
+    };
+  }
+
+  const clientIp = resolveUpgradeClientIp(request) || "unknown";
+  const rateLimitResult = realtimeUpgradeIpLimiter.consume(`realtime:${clientIp}`);
+
+  if (!rateLimitResult.allowed) {
+    return {
+      ok: false,
+      statusCode: 429,
+      statusText: "Too Many Requests",
+      headers: {
+        "Retry-After": String(rateLimitResult.retryAfterSeconds)
+      }
+    };
+  }
+
   const accessToken = trimString(
     requestUrl.searchParams.get("access_token") || requestUrl.searchParams.get("token")
   );
@@ -307,7 +416,7 @@ export function attachRealtimeServer(server) {
       const authResult = await authenticateUpgradeRequest(request);
 
       if (!authResult.ok) {
-        writeHttpError(socket, authResult.statusCode, authResult.statusText);
+        writeHttpError(socket, authResult.statusCode, authResult.statusText, authResult.headers);
         return;
       }
 

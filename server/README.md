@@ -100,11 +100,14 @@ Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser
 3. Configure MongoDB:
    - Local Mongo: set `MONGODB_URI`
    - MongoDB Atlas: set `MONGODB_CLUSTER_HOST`, `MONGODB_DATABASE_NAME`, `MONGODB_USERNAME`, and `MONGODB_PASSWORD`
+   - Optional partitioned layout: also set `MONGODB_URI_TWO`, `MONGODB_URI_THREE`, and `MONGODB_URI_FOUR`
 4. Configure auth and app runtime:
    - `JWT_SECRET`
    - Optional: `JWT_EXPIRES_IN`
    - Optional: `PORT`
-   - Optional: `CORS_ORIGIN`
+   - `CORS_ORIGIN` for production, for example `https://yourapp.vercel.app`
+   - Optional aliases: `FRONTEND_ORIGIN`, `APP_ORIGIN`
+   - `TRUST_PROXY=1` when the API is behind a platform proxy such as Render
 5. Configure SMS/OTP if you want real phone verification:
    - `SMS_APIKEY`
    - Optional: `SMS_BASE_URL`
@@ -117,6 +120,16 @@ Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser
    - `VOICE_NOTES_PER_DAY_LIMIT`
    - `VOICE_NOTE_DAILY_LIMIT_TIMEZONE`
    - `MONGODB_DNS_SERVERS`
+   - `SERVER_REQUEST_TIMEOUT_MS`
+   - `SERVER_HEADERS_TIMEOUT_MS`
+   - `SERVER_KEEP_ALIVE_TIMEOUT_MS`
+
+## Frontend runtime config
+
+- The static frontend now reads `runtime-config.js` before the app boots.
+- For split-domain deploys such as `yourapp.vercel.app` -> `your-api.onrender.com`, set `window.BOITEKONG_PULSE_CONFIG.API_BASE_URL` to `https://your-api.onrender.com/api`.
+- Leave `API_BASE_URL` blank only for localhost or private-network development.
+- If the frontend is deployed without an API base URL on a non-local hostname, the app now stops early with a clear configuration error instead of silently guessing the wrong origin.
 
 ## Scripts
 
@@ -125,11 +138,33 @@ Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser
 - `npm run check:api` - syntax-check the API entrypoint
 - `npm run db:init` - initialize collections/indexes
 - `npm run check:db` - smoke-test Mongo connectivity
+- `npm run db:migrate-partitions` - copy posts/comments/notifications and conversations/messages into the optional secondary Mongo targets
+- `npm run db:cleanup-partitions` - re-sync, verify, and drop the old migrated collections from the core Mongo store
 - `npm run cleanup:legacy-voice-notes` - purge older inline `data:` voice notes
+
+## Optional Multi-DB Partitioning
+
+- Default mode is `MONGODB_PARTITION_MODE=single`, which keeps every model on `MONGODB_URI`.
+- `core` data stays on `MONGODB_URI`: users, OTP verifications, and reports.
+- `content` data can be moved to `MONGODB_URI_TWO`: posts and comments.
+- `messaging` data can be moved to `MONGODB_URI_THREE`: conversations and messages.
+- `notifications` data can be moved to `MONGODB_URI_FOUR`: notifications.
+- Safe rollout order:
+  1. Set `MONGODB_URI_TWO`, `MONGODB_URI_THREE`, and optionally `MONGODB_URI_FOUR`, but keep `MONGODB_PARTITION_MODE=single`.
+  2. Run `npm run db:migrate-partitions`.
+  3. Verify the copied data from the extra clusters.
+  4. Switch `MONGODB_PARTITION_MODE=partitioned` and restart the API.
+- If `MONGODB_URI_FOUR` is left blank, notifications stay grouped with the content store.
+- The migration script is copy-first: it upserts into the secondary targets and leaves the original collections untouched until you choose to clean them up later.
+- After the split has been verified, `npm run db:cleanup-partitions` re-syncs the source docs one last time, verifies their `_id`s exist in the target stores, and only then drops the old source collections from the core database.
 
 ## Important notes
 
 - The API now refuses to start in `production` if `JWT_SECRET` is still the placeholder default.
+- The API also refuses to start in `production` if `CORS_ORIGIN` is blank, wildcarded, or not a valid `http(s)` origin list.
+- The API now adds security headers and `no-store` cache headers to `/api` responses.
+- Auth, signup, password-reset, and OTP endpoints now have in-memory rate limits to reduce brute-force and abuse pressure.
+- Realtime websocket upgrades now enforce valid websocket handshakes, allowed frontend origins, and per-IP handshake throttling.
 - The frontend still keeps browser caches for hydration/fallback, but the primary app flows are API-backed now.
 - Forgot-password reset uses SMS OTP, requires a phone number that already exists in the database, expires after 5 minutes, and can only be completed once every 24 hours.
 - Avatars still tolerate data URLs in the current migration phase.
@@ -147,7 +182,9 @@ Before a real beta deployment, confirm:
 - end-to-end browser QA passes against the real API
 - SMS OTP works on a real phone/provider path
 - `JWT_SECRET` is production-safe
+- `runtime-config.js` points the frontend to the real API base URL
 - `CORS_ORIGIN` is locked to the real frontend origin
+- `TRUST_PROXY` is set correctly for the deployment platform
 - MongoDB Atlas or the production Mongo deployment is reachable from the deployed environment
 - monitoring/logging is in place
 - backup/restore expectations are defined

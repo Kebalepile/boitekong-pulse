@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 
 const { Schema } = mongoose;
 
@@ -72,4 +76,12 @@ const notificationSchema = new Schema(
 notificationSchema.index({ userId: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, read: 1, createdAt: -1 });
 
-export const Notification = mongoose.model("Notification", notificationSchema);
+export let Notification = createUnboundModelPlaceholder({
+  modelName: "Notification",
+  collectionName: "notifications"
+});
+
+export function bindNotificationModel(connection) {
+  Notification = bindConnectionModel(connection, "Notification", notificationSchema);
+  return Notification;
+}

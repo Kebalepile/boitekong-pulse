@@ -68,7 +68,14 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
   });
   menuBtn.append(createNavButtonContent("menu", "Menu"));
 
-  const brand = createElement("div", { className: "topbar-brand" });
+  const brand = createElement("button", {
+    className: "topbar-brand topbar-brand-link",
+    type: "button",
+    attributes: {
+      "aria-label": "Go to home",
+      title: "Home"
+    }
+  });
   brand.append(createBrandMark({ compact: true, showTagline: false }));
 
   const searchBtn = createElement("button", {
@@ -450,6 +457,9 @@ export function createNavbar(currentUser, activeRoute = "feed", options = {}) {
     });
   };
 
+  brand.addEventListener("click", () => {
+    void navigate("feed");
+  });
   menuBtn.addEventListener("click", drawerController.open);
   notificationsBtn.addEventListener("click", notificationsMenuController.open);
   profileBtn.addEventListener("click", accountMenuController.open);
@@ -506,7 +516,20 @@ function createTopbarDrawer({
       }
     });
     const header = createElement("div", { className: "topbar-drawer-header" });
-    header.append(createBrandMark({ compact: true, showTagline: false }));
+    const brandButton = createElement("button", {
+      className: "topbar-drawer-brand-btn",
+      type: "button",
+      attributes: {
+        "aria-label": "Go to home",
+        title: "Home"
+      }
+    });
+    brandButton.append(createBrandMark({ compact: true, showTagline: false }));
+    brandButton.addEventListener("click", () => {
+      close();
+      onNavigate("feed");
+    });
+    header.append(brandButton);
 
     const navSection = createElement("div", { className: "topbar-drawer-section" });
     navSection.append(
@@ -889,17 +912,23 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
   };
 
   const open = () => {
-    if (!root?.isConnected) {
+    const menu = ensureRoot();
+    const wasConnected = menu.isConnected;
+
+    if (!wasConnected) {
       visibleNotificationCount = NOTIFICATION_BATCH_SIZE;
     }
 
-    const menu = ensureRoot();
+    window.clearTimeout(closeTimerId);
+    closeTimerId = null;
+
     if (!menu.isConnected) {
       document.body.appendChild(menu);
-      window.requestAnimationFrame(() => {
-        menu.classList.add("topbar-notifications-root-open");
-      });
     }
+
+    window.requestAnimationFrame(() => {
+      menu.classList.add("topbar-notifications-root-open");
+    });
 
     void loadNotifications({
       currentUserId: currentUser.id,
@@ -915,13 +944,6 @@ function createNotificationsMenu({ currentUser, onNavigate, onNotificationsChang
       .catch((error) => {
         showToast(error.message || "Could not load notifications.", "error");
       });
-
-    if (currentUser.notificationsEnabled !== false) {
-      void ensureBrowserNotificationPermission().then(() => {
-        updatePermissionHelper();
-      });
-      return;
-    }
 
     updatePermissionHelper();
   };

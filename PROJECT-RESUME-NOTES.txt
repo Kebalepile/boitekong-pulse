@@ -1,5 +1,5 @@
 BOITEKONG PULSE - PROJECT RESUME NOTES
-Date: 2026-04-16
+Date: 2026-04-20
 
 PURPOSE OF THIS FILE
 - This is the quickest resume point for the next session.
@@ -73,6 +73,71 @@ MAIN FRONTEND ROUTES
 - edit-post
 - search
 - messages
+
+PRODUCTION BATCH TARGETS
+- Use these list batching values for production:
+  - FEED_BATCH_SIZE = 10
+  - COMMENT_BATCH_SIZE = 6
+  - REPLY_BATCH_SIZE = 4
+  - SEARCH_BATCH_SIZE = 10
+  - CHAT_BATCH_SIZE = 10
+  - NOTIFICATION_BATCH_SIZE = 10
+  - DISCOVER_USERS_BATCH_SIZE = 10
+  - THREAD_MESSAGE_BATCH_SIZE = 24
+
+SHARING + DISTRIBUTION NOTES
+- Share API flows should include the deployed web-app production origin in shared content whenever the app is running from a real HTTPS/non-localhost origin.
+- Post/comment/invite share fallbacks should copy the same app URL into the clipboard text when native share is unavailable.
+- If the browser supports Web Share file payloads, attach the branded app logo asset with the share.
+- A QR code with embedded logo is still an optional follow-up enhancement; there is no dedicated QR generator wired into the repo yet.
+
+PUBLIC INFO COPY SOURCES
+- The public-facing copy for:
+  - About
+  - Help
+  - Privacy
+  - Terms & Conditions
+  - Contact
+  - Install / PWA
+  lives in:
+  - `js/views/publicInfoView.js`
+- Those pages still need a final production content pass rather than placeholder/product-direction copy only.
+
+BACKEND AUTH / KEY NOTES
+- Backend environment/auth configuration is currently centered in `server/src/config/env.js`.
+- Frontend split-domain deployment configuration now also depends on `runtime-config.js` at the repo root.
+- The frontend reads `window.BOITEKONG_PULSE_CONFIG.API_BASE_URL` before boot.
+- Leave that blank only for localhost/private-network development.
+- For separate frontend/API domains in production, set it to the full API URL, for example:
+  - `https://your-api.onrender.com/api`
+- Important auth/security-related env values to confirm before production:
+  - `JWT_SECRET`
+  - `JWT_EXPIRES_IN`
+  - `CORS_ORIGIN`
+  - `SMS_APIKEY` / `SMS_API_KEY`
+- `JWT_SECRET` already throws in production if it is left at the default fallback value.
+- `CORS_ORIGIN` now also throws in production if it is blank, wildcard, or not a valid origin list.
+- Backend hardening now also includes:
+  - security headers on API responses
+  - `no-store` cache headers on `/api`
+  - auth/signup/password-reset/OTP rate limits
+  - websocket upgrade origin checks plus handshake throttling
+- `TRUST_PROXY` should be set correctly when the API is behind Render or another reverse proxy.
+- Backend now also supports an optional partitioned MongoDB layout:
+  - `MONGODB_URI` remains the core store for users, OTP verifications, and reports
+  - `MONGODB_URI_TWO` can host posts and comments
+  - `MONGODB_URI_THREE` can host conversations and messages
+  - `MONGODB_URI_FOUR` can host notifications
+  - `MONGODB_PARTITION_MODE=single` keeps all reads/writes on the primary DB
+  - `MONGODB_PARTITION_MODE=partitioned` activates the split bindings after data has been copied
+- Safe rollout for multi-DB mode:
+  - keep `MONGODB_PARTITION_MODE=single`
+  - set `MONGODB_URI_TWO` / `MONGODB_URI_THREE` / optional `MONGODB_URI_FOUR`
+  - run `npm run db:migrate-partitions`
+  - verify the copied data
+  - only then switch to `partitioned`
+- The partition migration script is copy-first and does NOT delete the original collections yet.
+- Production deployment still needs real secret rotation and confirmation that no default/local values remain in use.
 
 IMPORTANT STORAGE KEYS STILL IN USE
 - USERS: bp_users
@@ -177,6 +242,8 @@ WHAT IS ALREADY BUILT
 - `npm run check:api`
 - `npm run db:init`
 - `npm run check:db`
+- `npm run db:migrate-partitions`
+- `npm run db:cleanup-partitions`
 - `npm run cleanup:legacy-voice-notes`
 
 WHAT WAS CLEANED UP TODAY
@@ -248,6 +315,8 @@ WHAT IS STILL LEFT BEFORE A REAL BETA GO-LIVE
 - Auth and OTP abuse controls should be confirmed before public exposure.
 - PWA/service-worker behavior should be retested after backend deployment.
 - Legal/privacy/minimum public-facing product copy still needs final content if this will be publicly accessible.
+- Public info pages still need a final production wording pass across About, Help, Privacy, Terms & Conditions, Contact, and Install/PWA.
+- Backend auth/security env values still need a final production verification pass, especially JWT signing, CORS, and SMS provider keys.
 
 BETA GO-LIVE DECISION RULE
 - If Friday/mobile QA passes, that means the product flow is in a strong place.

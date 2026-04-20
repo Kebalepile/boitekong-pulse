@@ -103,7 +103,7 @@ export async function registerUser(payload = {}, options = {}) {
 
   return {
     token,
-    user: serializeUser(user)
+    user: serializeUser(user, { includePrivateEncryption: true })
   };
 }
 
@@ -150,6 +150,6 @@ export async function loginUser(payload = {}) {
 
   return {
     token,
-    user: serializeUser(user)
+    user: serializeUser(user, { includePrivateEncryption: true })
   };
 }

@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 import { reactionSchema, voiceNoteSchema } from "./shared.js";
 
 const { Schema } = mongoose;
@@ -56,4 +60,12 @@ commentSchema.index({ postId: 1, createdAt: 1 });
 commentSchema.index({ parentId: 1, createdAt: 1 });
 commentSchema.index({ userId: 1, createdAt: -1 });
 
-export const Comment = mongoose.model("Comment", commentSchema);
+export let Comment = createUnboundModelPlaceholder({
+  modelName: "Comment",
+  collectionName: "comments"
+});
+
+export function bindCommentModel(connection) {
+  Comment = bindConnectionModel(connection, "Comment", commentSchema);
+  return Comment;
+}

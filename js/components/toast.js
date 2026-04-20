@@ -19,6 +19,10 @@ function buildToastTitle(type, variant, explicitTitle) {
     return "Posted";
   }
 
+  if (variant === "edited-success") {
+    return "Edited";
+  }
+
   if (variant === "updated-success") {
     return "Updated";
   }

@@ -4,7 +4,11 @@ import { apiRequest } from "./apiClient.js";
 import { getHiddenTargetIdsForUser } from "./reportService.js";
 import { upsertUsers } from "./userService.js";
 
-const appNotificationIconUrl = new URL("../../assets/app-icon.png", import.meta.url).href;
+const APP_ICON_VERSION = "20260419-2";
+const appNotificationIconUrl = new URL(
+  `../../assets/pwa-icon-192.png?v=${APP_ICON_VERSION}`,
+  import.meta.url
+).href;
 
 let notificationOpenHandler = null;
 const loadedNotificationUserIds = new Set();
@@ -70,6 +74,22 @@ function emitNotificationChange(notifications) {
 function getCurrentUserId() {
   const currentUser = storage.get(STORAGE_KEYS.CURRENT_USER, null);
   return typeof currentUser?.id === "string" ? currentUser.id : "";
+}
+
+function getActiveVisibleConversationId() {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return "";
+  }
+
+  const routeState = storage.get(STORAGE_KEYS.LAST_ROUTE, null);
+
+  if (routeState?.routeName !== "messages") {
+    return "";
+  }
+
+  return typeof routeState?.payload?.conversationId === "string"
+    ? routeState.payload.conversationId.trim()
+    : "";
 }
 
 function findNotificationUser(userId) {
@@ -182,11 +202,17 @@ function getAggregateBrowserNotificationCopy(count) {
 }
 
 function isBrowserNotificationSupported() {
-  return typeof window !== "undefined" && typeof Notification !== "undefined";
+  return (
+    typeof window !== "undefined" &&
+    typeof Notification === "function" &&
+    typeof Notification.requestPermission === "function"
+  );
 }
 
 function showBrowserNotification(notification, options = {}) {
-  if (!isBrowserNotificationSupported() || Notification.permission !== "granted") {
+  const permissionStatus = getBrowserNotificationPermissionStatus();
+
+  if (!permissionStatus.supported || permissionStatus.permission !== "granted") {
     return null;
   }
 
@@ -197,16 +223,22 @@ function showBrowserNotification(notification, options = {}) {
   }
 
   const { title, body } = options.copy || getBrowserNotificationCopy(notification);
-  const browserNotification = new Notification(title, {
-    body,
-    icon: appNotificationIconUrl,
-    badge: appNotificationIconUrl,
-    tag:
-      options.tag ||
-      (notification.type === "dm" && notification.conversationId
-        ? `dm-${notification.conversationId}`
-        : notification.id)
-  });
+  let browserNotification = null;
+
+  try {
+    browserNotification = new Notification(title, {
+      body,
+      icon: appNotificationIconUrl,
+      badge: appNotificationIconUrl,
+      tag:
+        options.tag ||
+        (notification.type === "dm" && notification.conversationId
+          ? `dm-${notification.conversationId}`
+          : notification.id)
+    });
+  } catch {
+    return null;
+  }
 
   browserNotification.onclick = () => {
     browserNotification.close();
@@ -267,6 +299,43 @@ function maybeShowNewBrowserNotifications({
       notificationIds: nextUnreadNotifications.map((notification) => notification.id)
     }
   });
+}
+
+function suppressNotificationsForActiveConversation({
+  currentUserId,
+  notifications = []
+}) {
+  const activeConversationId = getActiveVisibleConversationId();
+
+  if (!currentUserId || !activeConversationId) {
+    return {
+      notifications,
+      suppressedConversationIds: []
+    };
+  }
+
+  const suppressedConversationIds = new Set();
+  const nextNotifications = notifications.map((notification) => {
+    if (
+      notification.userId === currentUserId &&
+      notification.type === "dm" &&
+      notification.conversationId === activeConversationId &&
+      notification.read !== true
+    ) {
+      suppressedConversationIds.add(notification.conversationId);
+      return {
+        ...notification,
+        read: true
+      };
+    }
+
+    return notification;
+  });
+
+  return {
+    notifications: nextNotifications,
+    suppressedConversationIds: Array.from(suppressedConversationIds)
+  };
 }
 
 export function getNotifications() {
@@ -335,15 +404,29 @@ export async function loadNotifications({
   }
 
   const notifications = normalizeNotifications(response.notifications || []);
+  const {
+    notifications: notificationsToStore,
+    suppressedConversationIds
+  } = suppressNotificationsForActiveConversation({
+    currentUserId: requestUserId,
+    notifications
+  });
 
   syncNotificationActors(response.notifications || []);
-  replaceNotificationsForUser(requestUserId, notifications);
+  replaceNotificationsForUser(requestUserId, notificationsToStore);
   maybeShowNewBrowserNotifications({
     currentUserId: requestUserId,
     previousNotifications,
-    nextNotifications: notifications
+    nextNotifications: notificationsToStore
   });
   loadedNotificationUserIds.add(requestUserId);
+
+  suppressedConversationIds.forEach((conversationId) => {
+    void clearConversationNotifications({
+      userId: requestUserId,
+      conversationId
+    });
+  });
 
   return getNotificationsForUser(requestUserId);
 }
@@ -558,11 +641,18 @@ export async function ensureBrowserNotificationPermission() {
     return status;
   }
 
-  const permission = await Notification.requestPermission();
-  return {
-    supported: true,
-    permission
-  };
+  try {
+    const permission = await Notification.requestPermission();
+    return {
+      supported: true,
+      permission
+    };
+  } catch {
+    return {
+      supported: false,
+      permission: "unsupported"
+    };
+  }
 }
 
 export function registerNotificationOpenHandler(handler) {
@@ -577,10 +667,17 @@ export function getBrowserNotificationPermissionStatus() {
     };
   }
 
-  return {
-    supported: true,
-    permission: Notification.permission
-  };
+  try {
+    return {
+      supported: true,
+      permission: Notification.permission
+    };
+  } catch {
+    return {
+      supported: false,
+      permission: "unsupported"
+    };
+  }
 }
 
 function isNotificationHiddenForUser(notification, userId) {

@@ -12,7 +12,10 @@ import {
   updateUserProfileRemote,
   upsertUser
 } from "./userService.js";
-import { ensureDirectMessageEncryptionSession } from "./directMessageEncryptionService.js";
+import {
+  buildDirectMessageEncryptionPasswordChangePayload,
+  ensureDirectMessageEncryptionSession
+} from "./directMessageEncryptionService.js";
 import { resetConversationState } from "./messageService.js";
 import { resetNotificationState } from "./notificationService.js";
 import { resetPostState } from "./postService.js";
@@ -29,13 +32,14 @@ function clearClientSessionState() {
   clearCurrentUser();
 }
 
-async function persistAuthenticatedSession({ token, user }) {
+async function persistAuthenticatedSession({ token, user, password = "" }) {
   clearClientSessionState();
   setAccessToken(token);
   let normalizedUser = upsertUser(user);
   setCurrentUser(normalizedUser);
   normalizedUser = await ensureDirectMessageEncryptionSession({
     user: normalizedUser,
+    password,
     onUserUpdated: (updatedUser) => {
       const nextUser = upsertUser(updatedUser);
       setCurrentUser(nextUser);
@@ -66,7 +70,10 @@ export async function registerUser({
     }
   });
 
-  return persistAuthenticatedSession(response);
+  return persistAuthenticatedSession({
+    ...response,
+    password
+  });
 }
 
 export async function requestRegistrationOtp({
@@ -112,7 +119,10 @@ export async function loginUser({ identifier, password }) {
     }
   });
 
-  return persistAuthenticatedSession(response);
+  return persistAuthenticatedSession({
+    ...response,
+    password
+  });
 }
 
 export async function requestPasswordResetOtp({ phoneNumber }) {
@@ -160,6 +170,18 @@ export async function updateAuthenticatedUserProfile({
     throw authError;
   }
 
+  const wantsPasswordChange =
+    String(newPassword ?? "").trim() || String(confirmNewPassword ?? "").trim();
+  let directMessageEncryption;
+
+  if (wantsPasswordChange) {
+    directMessageEncryption = await buildDirectMessageEncryptionPasswordChangePayload({
+      user: currentUser,
+      currentPassword,
+      nextPassword: newPassword
+    });
+  }
+
   return updateUserProfileRemote({
     username,
     phoneNumber,
@@ -168,7 +190,8 @@ export async function updateAuthenticatedUserProfile({
     avatarDataUrl,
     currentPassword,
     newPassword,
-    confirmNewPassword
+    confirmNewPassword,
+    directMessageEncryption
   });
 }
 

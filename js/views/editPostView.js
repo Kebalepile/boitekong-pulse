@@ -67,7 +67,7 @@ export async function renderEditPost(app, currentUser, payload) {
   });
   const formTitle = createElement("h2", {
     className: "section-title",
-    text: "Update post"
+    text: "Edit post"
   });
   const formText = createElement("p", {
     className: "section-copy",
@@ -82,13 +82,13 @@ export async function renderEditPost(app, currentUser, payload) {
   const contentField = createTextAreaField({
     labelText: "Post Content",
     inputId: "edit-post-content",
-    placeholder: "Update your post",
+    placeholder: "Edit your post",
     value: post.content
   });
   const imageField = createPostImageField({
     form,
     inputId: "edit-post-image",
-    titleText: "Update post image",
+    titleText: "Edit post image",
     initialImage: post.image || post.imageUrl || ""
   });
   const imageControl = imageField.control || imageField.wrapper;
@@ -96,7 +96,7 @@ export async function renderEditPost(app, currentUser, payload) {
   contentField.mediaSlot.replaceChildren(imageControl);
   contentField.previewSlot.replaceChildren(imageField.wrapper);
 
-  const actions = createElement("div", { className: "form-actions" });
+  const actions = createElement("div", { className: "form-actions edit-post-actions" });
 
   const cancelBtn = createElement("button", {
     className: "secondary-btn",
@@ -168,6 +168,14 @@ export async function renderEditPost(app, currentUser, payload) {
         throw pendingImageError;
       }
 
+      if (imageField.hasPreviewError()) {
+        const invalidImageError = new Error(
+          "That image could not be previewed. Choose another image or remove it first."
+        );
+        invalidImageError.field = "image";
+        throw invalidImageError;
+      }
+
       setEditBusyState(true);
       activeLoadingOverlay = showLoadingOverlay({
         label: "Saving changes..."
@@ -179,7 +187,7 @@ export async function renderEditPost(app, currentUser, payload) {
       });
 
       showToast("Your post changes are live.", "success", {
-        variant: "updated-success",
+        variant: "edited-success",
         durationMs: 1800
       });
       await navigate("feed");

@@ -7,6 +7,8 @@ export const MAX_POST_CONTENT_LENGTH = 1000;
 export const MAX_COMMENT_LENGTH = 300;
 export const MAX_REPORT_NOTE_LENGTH = 120;
 export const MAX_VOICE_NOTE_DURATION_MS = 60000;
+// Keep raw audio comfortably below the 1 MB encrypted/base64 send envelope.
+export const MAX_VOICE_NOTE_AUDIO_BYTES = 760 * 1024;
 export const MAX_INLINE_IMAGE_BYTES = 1024 * 1024;
 const ALLOWED_REACTION_TYPES = new Set(["like", "dislike"]);
 const ALLOWED_INLINE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);

@@ -1,4 +1,5 @@
 import {
+  closeDatabaseConnections,
   connectToDatabase,
   initializeDatabaseStructure
 } from "../config/database.js";
@@ -94,6 +95,7 @@ async function run() {
   );
 
   console.log(`Legacy voice-note purge complete. Updated ${totalRemoved} documents.`);
+  await closeDatabaseConnections();
 }
 
 run().catch((error) => {

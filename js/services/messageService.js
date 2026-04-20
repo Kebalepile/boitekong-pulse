@@ -5,6 +5,7 @@ import { getCurrentUser, setCurrentUser, upsertUser, upsertUsers } from "./userS
 import {
   decryptConversationMessages,
   encryptDirectMessageText,
+  encryptDirectMessageVoiceNote,
   ensureDirectMessageEncryptionSession
 } from "./directMessageEncryptionService.js";
 import { normalizeMessageEncryptionMetadata } from "../utils/directMessageEncryption.js";
@@ -35,6 +36,7 @@ function normalizeMessageRecord(message = {}, conversationId = "") {
     senderId: typeof message.senderId === "string" ? message.senderId : "",
     replyToMessageId:
       typeof message.replyToMessageId === "string" ? message.replyToMessageId : "",
+    isForwarded: message.isForwarded === true,
     text: typeof message.text === "string" ? message.text.trim() : "",
     encryptedText:
       typeof message.encryptedText === "string" ? message.encryptedText.trim() : "",
@@ -130,6 +132,10 @@ function sanitizeVoiceNoteForStorage(voiceNote) {
     ...normalizedVoiceNote,
     dataUrl: "",
     audioBase64: "",
+    encryptedAudioBase64:
+      typeof normalizedVoiceNote.encryptedAudioBase64 === "string"
+        ? normalizedVoiceNote.encryptedAudioBase64
+        : "",
     source: /^https?:\/\//i.test(remoteUrl) ? remoteUrl : "",
     pendingSync: !/^https?:\/\//i.test(remoteUrl)
   };
@@ -405,31 +411,38 @@ export async function sendMessage({
   text,
   voiceNote = null,
   clientRequestId = "",
-  replyToMessageId = ""
+  replyToMessageId = "",
+  isForwarded = false
 }) {
   const currentUser = await ensureCurrentUserEncryptionSession();
   const conversation = getConversationById(conversationId);
-  const encryptedPayload =
-    !voiceNote && currentUser?.id && conversation
+  const encryptedTextPayload =
+    !voiceNote
       ? await encryptDirectMessageText({
           conversation,
           currentUser,
           text
         })
-      : {
-          text,
-          encryptedText: "",
-          encryption: null
-        };
+      : null;
+  const encryptedVoiceNotePayload = voiceNote
+    ? await encryptDirectMessageVoiceNote({
+        conversation,
+        currentUser,
+        voiceNote
+      })
+    : null;
   const response = await apiRequest(`/conversations/${encodeURIComponent(conversationId)}/messages`, {
     method: "POST",
     body: {
       clientRequestId,
       replyToMessageId,
-      text: encryptedPayload.text,
-      encryptedText: encryptedPayload.encryptedText,
-      encryption: encryptedPayload.encryption,
-      voiceNote: serializeVoiceNoteForTransport(voiceNote)
+      isForwarded: isForwarded === true,
+      text: encryptedTextPayload?.text ?? text,
+      encryptedText: encryptedTextPayload?.encryptedText || "",
+      encryption:
+        encryptedVoiceNotePayload?.encryption || encryptedTextPayload?.encryption || null,
+      voiceNote:
+        encryptedVoiceNotePayload?.voiceNote || serializeVoiceNoteForTransport(voiceNote)
     }
   });
 

@@ -572,6 +572,7 @@ export async function resetPasswordWithOtp({
   }
 
   user.passwordHash = await bcrypt.hash(safePassword, 12);
+  user.directMessageEncryption = null;
   user.lastForgotPasswordResetAt = new Date();
   await user.save();
 

@@ -8,19 +8,6 @@ export const CHAT_BATCH_SIZE = 8;
 export const NOTIFICATION_BATCH_SIZE = 8;
 export const DISCOVER_USERS_BATCH_SIZE = 8;
 export const THREAD_MESSAGE_BATCH_SIZE = 20;
-/**
- * 
- * Use for prodction
- * export const FEED_BATCH_SIZE = 10;
-export const COMMENT_BATCH_SIZE = 6;
-export const REPLY_BATCH_SIZE = 4;
-export const SEARCH_BATCH_SIZE = 10;
-export const CHAT_BATCH_SIZE = 10;
-export const NOTIFICATION_BATCH_SIZE = 10;
-export const DISCOVER_USERS_BATCH_SIZE = 10;
-export const THREAD_MESSAGE_BATCH_SIZE = 24;
-
- */
 
 function getDocumentScrollTop() {
   if (typeof window === "undefined") {

@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 import { readReceiptSchema, voiceNoteSchema } from "./shared.js";
 
 const { Schema } = mongoose;
@@ -28,6 +32,10 @@ const messageEncryptionSchema = new Schema(
     senderPublicKeyJwk: {
       type: Schema.Types.Mixed,
       default: null
+    },
+    recipientPublicKeyJwk: {
+      type: Schema.Types.Mixed,
+      default: null
     }
   },
   {
@@ -54,6 +62,10 @@ const messageSchema = new Schema(
       ref: "Message",
       default: null,
       index: true
+    },
+    isForwarded: {
+      type: Boolean,
+      default: false
     },
     clientRequestId: {
       type: String,
@@ -116,4 +128,12 @@ messageSchema.index(
   }
 );
 
-export const Message = mongoose.model("Message", messageSchema);
+export let Message = createUnboundModelPlaceholder({
+  modelName: "Message",
+  collectionName: "messages"
+});
+
+export function bindMessageModel(connection) {
+  Message = bindConnectionModel(connection, "Message", messageSchema);
+  return Message;
+}

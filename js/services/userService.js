@@ -107,6 +107,55 @@ function isFullUserRecord(user = {}) {
   ].some((key) => hasOwnProperty(user, key));
 }
 
+function directMessageEncryptionRecordsMatch(firstRecord, secondRecord) {
+  if (!firstRecord || !secondRecord) {
+    return false;
+  }
+
+  const serializePublicShape = (record) =>
+    JSON.stringify({
+      keyId: record.keyId,
+      publicKeyJwk: record.publicKeyJwk,
+      previousKeys: Array.isArray(record.previousKeys)
+        ? [...record.previousKeys]
+            .sort((first, second) => first.keyId.localeCompare(second.keyId))
+            .map((entry) => ({
+              keyId: entry.keyId,
+              publicKeyJwk: entry.publicKeyJwk
+            }))
+        : []
+    });
+
+  return serializePublicShape(firstRecord) === serializePublicShape(secondRecord);
+}
+
+function mergeDirectMessageEncryptionPrivateData(existingRecord, incomingRecord) {
+  if (!existingRecord || !incomingRecord) {
+    return incomingRecord || existingRecord || null;
+  }
+
+  const existingPreviousKeysById = new Map(
+    Array.isArray(existingRecord.previousKeys)
+      ? existingRecord.previousKeys.map((entry) => [entry.keyId, entry])
+      : []
+  );
+
+  return {
+    ...incomingRecord,
+    privateKeyEnvelope:
+      incomingRecord.privateKeyEnvelope || existingRecord.privateKeyEnvelope || null,
+    previousKeys: Array.isArray(incomingRecord.previousKeys)
+      ? incomingRecord.previousKeys.map((entry) => ({
+          ...entry,
+          privateKeyEnvelope:
+            entry.privateKeyEnvelope ||
+            existingPreviousKeysById.get(entry.keyId)?.privateKeyEnvelope ||
+            null
+        }))
+      : []
+  };
+}
+
 function getCurrentUserIdHint() {
   if (typeof currentUserCache?.id === "string" && currentUserCache.id) {
     return currentUserCache.id;
@@ -132,6 +181,26 @@ function mergeUserRecord(existingUser, incomingUser, rawIncomingUser) {
     mergedUser.avatarUrl = existingUser.avatarUrl || incomingUser.avatarUrl || "";
     mergedUser.avatarDataUrl =
       existingUser.avatarDataUrl || existingUser.avatarUrl || incomingUser.avatarDataUrl || "";
+  }
+
+  if (!hasOwnProperty(rawIncomingUser, "directMessageEncryption")) {
+    mergedUser.directMessageEncryption = existingUser.directMessageEncryption || null;
+    return mergedUser;
+  }
+
+  if (
+    existingUser.directMessageEncryption?.privateKeyEnvelope &&
+    incomingUser.directMessageEncryption &&
+    !incomingUser.directMessageEncryption.privateKeyEnvelope &&
+    directMessageEncryptionRecordsMatch(
+      existingUser.directMessageEncryption,
+      incomingUser.directMessageEncryption
+    )
+  ) {
+    mergedUser.directMessageEncryption = mergeDirectMessageEncryptionPrivateData(
+      existingUser.directMessageEncryption,
+      incomingUser.directMessageEncryption
+    );
   }
 
   return mergedUser;
@@ -430,7 +499,8 @@ export async function updateUserProfileRemote({
   avatarUrl,
   currentPassword,
   newPassword,
-  confirmNewPassword
+  confirmNewPassword,
+  directMessageEncryption
 }) {
   const body = {
     username,
@@ -441,6 +511,10 @@ export async function updateUserProfileRemote({
     newPassword,
     confirmNewPassword
   };
+
+  if (directMessageEncryption !== undefined) {
+    body.directMessageEncryption = directMessageEncryption;
+  }
 
   if (avatarDataUrl !== undefined || avatarUrl !== undefined) {
     body.avatarUrl = avatarDataUrl ?? avatarUrl ?? "";

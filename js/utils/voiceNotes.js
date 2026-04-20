@@ -15,7 +15,9 @@ const VOICE_NOTE_RECORDING_AUDIO_CONSTRAINTS = {
 
 export const MAX_VOICE_NOTE_DURATION_MS = 60000;
 export const VOICE_NOTE_PLAYBACK_RATES = [1, 1.5, 2];
-export const VOICE_NOTE_TARGET_AUDIO_BITS_PER_SECOND = 16000;
+// Keep raw audio comfortably below the 1 MB encrypted/base64 send envelope.
+export const MAX_VOICE_NOTE_AUDIO_BYTES = 760 * 1024;
+export const VOICE_NOTE_TARGET_AUDIO_BITS_PER_SECOND = 12000;
 
 function trimString(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -23,6 +25,59 @@ function trimString(value) {
 
 function normalizeBase64(value) {
   return trimString(value).replace(/\s+/g, "");
+}
+
+function getEncryptedVoiceNoteAudioBase64(voiceNote) {
+  return normalizeBase64(voiceNote?.encryptedAudioBase64);
+}
+
+function getBase64PayloadSizeBytes(value) {
+  const normalizedValue = normalizeBase64(value);
+
+  if (!normalizedValue) {
+    return 0;
+  }
+
+  const paddingLength = normalizedValue.match(/=+$/)?.[0].length || 0;
+  return Math.floor((normalizedValue.length * 3) / 4) - paddingLength;
+}
+
+function makeVoiceNoteTooLargeError(field = "voiceNote") {
+  const error = new Error(
+    "Voice notes must stay under 1 MB when sent securely. Try a slightly shorter recording."
+  );
+  error.code = "VOICE_NOTE_TOO_LARGE";
+  error.field = field;
+  error.maxBytes = MAX_VOICE_NOTE_AUDIO_BYTES;
+  return error;
+}
+
+function getVoiceNotePayloadSizeBytes(voiceNote) {
+  const declaredSize = Number.isFinite(voiceNote?.size) ? Math.max(0, Number(voiceNote.size)) : 0;
+  const declaredSizeBytes = Number.isFinite(voiceNote?.sizeBytes)
+    ? Math.max(0, Number(voiceNote.sizeBytes))
+    : 0;
+  const audioBase64Size = getBase64PayloadSizeBytes(voiceNote?.audioBase64);
+  const encryptedAudioBase64Size = getBase64PayloadSizeBytes(voiceNote?.encryptedAudioBase64);
+
+  return Math.max(
+    declaredSize,
+    declaredSizeBytes,
+    audioBase64Size,
+    encryptedAudioBase64Size
+  );
+}
+
+function assertVoiceNoteSizeWithinLimit(voiceNote, field = "voiceNote") {
+  if (getVoiceNotePayloadSizeBytes(voiceNote) > MAX_VOICE_NOTE_AUDIO_BYTES) {
+    throw makeVoiceNoteTooLargeError(field);
+  }
+}
+
+function assertVoiceNoteBlobSizeWithinLimit(blob, field = "voiceNote") {
+  if (Number(blob?.size || 0) > MAX_VOICE_NOTE_AUDIO_BYTES) {
+    throw makeVoiceNoteTooLargeError(field);
+  }
 }
 
 function extractAudioBase64FromDataUrl(dataUrl) {
@@ -120,7 +175,7 @@ export function getVoiceNoteFeatureStatus() {
     supported,
     mimeType: getSupportedVoiceNoteMimeType(),
     message: supported
-      ? "Optional voice note available. Record in-browser up to 60 seconds."
+      ? "Optional voice note available. Record in-browser up to 60 seconds within the secure send limit."
       : "Voice notes need MediaRecorder support in this browser."
   };
 }
@@ -274,6 +329,7 @@ export function normalizeVoiceNote(voiceNote) {
   }
 
   const audioBase64 = getVoiceNoteAudioBase64(voiceNote);
+  const encryptedAudioBase64 = getEncryptedVoiceNoteAudioBase64(voiceNote);
   const remoteUrl = typeof voiceNote.url === "string" ? voiceNote.url.trim() : "";
   const pendingSync = voiceNote?.pendingSync === true;
   const safeSource = audioBase64
@@ -285,7 +341,7 @@ export function normalizeVoiceNote(voiceNote) {
       ? remoteUrl
       : "";
 
-  if (!safeSource && !pendingSync) {
+  if (!safeSource && !pendingSync && !encryptedAudioBase64) {
     return null;
   }
 
@@ -296,6 +352,7 @@ export function normalizeVoiceNote(voiceNote) {
   return {
     dataUrl: "",
     audioBase64,
+    encryptedAudioBase64,
     url: remoteUrl,
     storageKey: typeof voiceNote.storageKey === "string" ? voiceNote.storageKey.trim() : "",
     source: safeSource,
@@ -317,12 +374,19 @@ export function serializeVoiceNoteForTransport(voiceNote) {
     return null;
   }
 
-  if (!normalizedVoiceNote.audioBase64 && !normalizedVoiceNote.url) {
+  if (
+    !normalizedVoiceNote.audioBase64 &&
+    !normalizedVoiceNote.encryptedAudioBase64 &&
+    !normalizedVoiceNote.url
+  ) {
     return null;
   }
 
+  assertVoiceNoteSizeWithinLimit(normalizedVoiceNote);
+
   return {
     audioBase64: normalizedVoiceNote.audioBase64,
+    encryptedAudioBase64: normalizedVoiceNote.encryptedAudioBase64,
     url: normalizedVoiceNote.url,
     storageKey: normalizedVoiceNote.storageKey,
     mimeType: normalizedVoiceNote.mimeType,
@@ -382,6 +446,7 @@ export function configureVoiceNoteAudio(audio, source = "", options = {}) {
 }
 
 async function createVoiceNotePayload({ blob, startedAt, maxDurationMs }) {
+  assertVoiceNoteBlobSizeWithinLimit(blob);
   const dataUrl = await readBlobAsDataUrl(blob);
 
   return {

@@ -55,6 +55,7 @@ export const sendMessageHandler = asyncHandler(async (req, res) => {
     conversationId: req.params.conversationId,
     clientRequestId: req.body.clientRequestId,
     replyToMessageId: req.body.replyToMessageId,
+    isForwarded: req.body.isForwarded === true,
     text: req.body.text,
     encryptedText: req.body.encryptedText,
     encryption: req.body.encryption || null,

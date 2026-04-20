@@ -3,7 +3,7 @@ import {
   requestRegistrationOtp,
   verifyRegistrationOtp
 } from "../services/authService.js";
-import { navigate, registerViewCleanup } from "../router.js";
+import { navigate, navigateAfterAuthentication, registerViewCleanup } from "../router.js";
 import {
   clearElement,
   createElement,
@@ -720,7 +720,9 @@ export function renderRegister(app) {
         phoneVerified: true,
         created: true
       });
-      navigate("feed");
+      void navigateAfterAuthentication({
+        skipTransition: true
+      });
     } catch (error) {
       if (error?.code === "REGISTRATION_PHONE_NOT_VERIFIED") {
         verificationState = {

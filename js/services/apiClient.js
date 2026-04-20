@@ -1,33 +1,138 @@
 import { STORAGE_KEYS } from "../config/storageKeys.js";
 import { storage } from "../storage/storage.js";
 
+const API_CONFIGURATION_ERROR_CODE = "API_CONFIGURATION_ERROR";
+const RUNTIME_CONFIG_KEY = "BOITEKONG_PULSE_CONFIG";
+const LEGACY_API_BASE_URL_KEY = "BOITEKONG_PULSE_API_BASE_URL";
+
 function trimTrailingSlash(value = "") {
   return String(value || "").replace(/\/+$/, "");
 }
 
-function resolveApiBaseUrl() {
-  const configuredBaseUrl =
-    typeof window !== "undefined" && typeof window.BOITEKONG_PULSE_API_BASE_URL === "string"
-      ? trimTrailingSlash(window.BOITEKONG_PULSE_API_BASE_URL)
+function getBrowserLocation() {
+  return typeof window !== "undefined" && window.location ? window.location : null;
+}
+
+function isPrivateIpv4Host(hostname = "") {
+  const normalizedHost = String(hostname || "").trim();
+
+  if (!normalizedHost) {
+    return false;
+  }
+
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(normalizedHost)) {
+    return true;
+  }
+
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(normalizedHost)) {
+    return true;
+  }
+
+  const match = normalizedHost.match(/^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+
+  if (!match) {
+    return false;
+  }
+
+  const secondOctet = Number.parseInt(match[1], 10);
+  return secondOctet >= 16 && secondOctet <= 31;
+}
+
+function isLocalDevelopmentHost(hostname = "") {
+  const normalizedHost = String(hostname || "").trim().toLowerCase();
+
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost === "127.0.0.1" ||
+    normalizedHost === "::1" ||
+    normalizedHost === "[::1]" ||
+    normalizedHost === "0.0.0.0" ||
+    normalizedHost.endsWith(".local") ||
+    normalizedHost === "host.docker.internal" ||
+    isPrivateIpv4Host(normalizedHost)
+  );
+}
+
+function getRuntimeConfig() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const runtimeConfig = window[RUNTIME_CONFIG_KEY];
+  return typeof runtimeConfig === "object" && runtimeConfig !== null ? runtimeConfig : {};
+}
+
+function readConfiguredApiBaseUrl() {
+  const runtimeConfig = getRuntimeConfig();
+  const runtimeConfigBaseUrl =
+    typeof runtimeConfig.API_BASE_URL === "string" ? runtimeConfig.API_BASE_URL : "";
+  const legacyConfiguredBaseUrl =
+    typeof window !== "undefined" && typeof window[LEGACY_API_BASE_URL_KEY] === "string"
+      ? window[LEGACY_API_BASE_URL_KEY]
       : "";
+
+  return trimTrailingSlash(runtimeConfigBaseUrl || legacyConfiguredBaseUrl);
+}
+
+function createApiConfigurationError() {
+  const error = new Error(
+    "Missing API base URL for this deployment. Set BOITEKONG_PULSE_CONFIG.API_BASE_URL in runtime-config.js, for example https://your-api.onrender.com/api."
+  );
+  error.code = API_CONFIGURATION_ERROR_CODE;
+  return error;
+}
+
+function getBrowserOriginFallback() {
+  const browserLocation = getBrowserLocation();
+
+  if (
+    browserLocation &&
+    (browserLocation.protocol === "http:" || browserLocation.protocol === "https:")
+  ) {
+    return browserLocation.origin;
+  }
+
+  return "http://127.0.0.1";
+}
+
+function buildLocalApiBaseUrl(browserLocation) {
+  const normalizedHost = String(browserLocation?.hostname || "").trim();
+
+  if (
+    !normalizedHost ||
+    normalizedHost === "::1" ||
+    normalizedHost === "[::1]" ||
+    normalizedHost === "0.0.0.0"
+  ) {
+    return "http://127.0.0.1:4000/api";
+  }
+
+  return `http://${normalizedHost}:4000/api`;
+}
+
+function resolveApiBaseUrl() {
+  const configuredBaseUrl = readConfiguredApiBaseUrl();
 
   if (configuredBaseUrl) {
     return configuredBaseUrl;
   }
 
-  if (typeof window !== "undefined" && window.location) {
-    const { hostname, origin, protocol } = window.location;
-    const isLocalHost = ["localhost", "127.0.0.1"].includes(hostname);
+  const browserLocation = getBrowserLocation();
+
+  if (browserLocation) {
+    const { hostname, protocol } = browserLocation;
 
     if (protocol === "file:") {
       return "http://127.0.0.1:4000/api";
     }
 
-    if (isLocalHost) {
-      return "http://127.0.0.1:4000/api";
+    if (isLocalDevelopmentHost(hostname)) {
+      return buildLocalApiBaseUrl(browserLocation);
     }
+  }
 
-    return `${trimTrailingSlash(origin)}/api`;
+  if (typeof window !== "undefined") {
+    throw createApiConfigurationError();
   }
 
   return "http://127.0.0.1:4000/api";
@@ -59,6 +164,10 @@ export function clearAccessToken() {
   storage.remove(STORAGE_KEYS.ACCESS_TOKEN);
 }
 
+export function ensureApiRuntimeConfiguration() {
+  return resolveApiBaseUrl();
+}
+
 export function getApiBaseUrl() {
   return resolveApiBaseUrl();
 }
@@ -71,7 +180,7 @@ export function resolveApiAssetUrl(value = "") {
   }
 
   try {
-    const apiBaseUrl = new URL(getApiBaseUrl());
+    const apiBaseUrl = new URL(getApiBaseUrl(), getBrowserOriginFallback());
     return new URL(trimmedValue, `${apiBaseUrl.origin}/`).toString();
   } catch {
     return trimmedValue;

@@ -26,6 +26,10 @@ export const voiceNoteSchema = new Schema(
       type: Buffer,
       default: undefined
     },
+    encryptedAudioBase64: {
+      type: String,
+      default: ""
+    },
     url: {
       type: String,
       default: ""

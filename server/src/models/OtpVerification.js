@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 
 const { Schema } = mongoose;
 
@@ -50,4 +54,12 @@ const otpVerificationSchema = new Schema(
 otpVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 otpVerificationSchema.index({ phoneNumber: 1, purpose: 1, createdAt: -1 });
 
-export const OtpVerification = mongoose.model("OtpVerification", otpVerificationSchema);
+export let OtpVerification = createUnboundModelPlaceholder({
+  modelName: "OtpVerification",
+  collectionName: "otpverifications"
+});
+
+export function bindOtpVerificationModel(connection) {
+  OtpVerification = bindConnectionModel(connection, "OtpVerification", otpVerificationSchema);
+  return OtpVerification;
+}

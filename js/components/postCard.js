@@ -18,6 +18,8 @@ import { showConfirmDialog } from "./confirmDialog.js";
 import { showActionSheet } from "./actionSheet.js";
 import { showReportSheet } from "./reportSheet.js";
 import { showUserPreviewSheet } from "./userPreviewSheet.js";
+import { resolveApiAssetUrl } from "../services/apiClient.js";
+import { protectImageElement, protectMediaShell } from "../utils/protectedMedia.js";
 import {
   createCommentCard,
   createVoiceNotePendingNotice,
@@ -53,8 +55,17 @@ import {
   REPLY_BATCH_SIZE,
   createLoadMoreControl
 } from "../utils/listBatching.js";
+import {
+  buildBrandedShareData,
+  buildShareClipboardText,
+  buildShareableFeedUrl
+} from "../utils/share.js";
 
 const POST_PREVIEW_LENGTH = 300;
+const POST_IMAGE_VIEWER_ROOT_ID = "post-image-viewer-root";
+const POST_IMAGE_VIEWER_ZOOM_MIN = 0.1;
+const POST_IMAGE_VIEWER_ZOOM_MAX = 4;
+const POST_IMAGE_VIEWER_ZOOM_STEP = 0.1;
 const voiceNoteFeatureStatus = getVoiceNoteFeatureStatus();
 const voiceNoteChoiceText = voiceNoteFeatureStatus.supported ? "" : voiceNoteFeatureStatus.message;
 
@@ -154,7 +165,13 @@ export function createPostCard(post, author, currentUserId, onReactionChange) {
   card.appendChild(content);
 
   if (post.image) {
-    card.appendChild(createPostImage(post.image));
+    const postImage = createPostImage(post.image, {
+      authorName: author?.username || "Unknown User"
+    });
+
+    if (postImage) {
+      card.appendChild(postImage);
+    }
   }
 
   const footer = createElement("div", { className: "post-card-footer" });
@@ -322,23 +339,32 @@ function createMoreIcon() {
   return svg;
 }
 
-  async function sharePostEntry(post, author) {
+async function sharePostEntry(post, author) {
   const authorName = author?.username || "Unknown User";
+  const shareUrl = buildShareableFeedUrl({
+    postId: post?.id || ""
+  });
   const shareText = post.content
     ? `${authorName}: ${post.content}`
     : `${authorName} shared a voice note on Boitekong Pulse.`;
+  const shareMessage = buildShareClipboardText(
+    shareText,
+    shareUrl ? `Open this post in Boitekong Pulse: ${shareUrl}` : ""
+  );
 
   try {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      await navigator.share({
-        title: "Post",
-        text: shareText
+      const shareData = await buildBrandedShareData({
+        title: `Post from ${authorName}`,
+        text: shareMessage,
+        url: shareUrl
       });
+      await navigator.share(shareData);
       return;
     }
 
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(shareText);
+      await navigator.clipboard.writeText(shareMessage);
       showToast("Post copied to clipboard.", "success");
       return;
     }
@@ -353,22 +379,344 @@ function createMoreIcon() {
   }
 }
 
-function createPostImage(imageUrl) {
+function createPostImage(imageUrl, { authorName = "" } = {}) {
+  const normalizedImageUrl = resolveApiAssetUrl(imageUrl);
+
+  if (!normalizedImageUrl) {
+    return null;
+  }
+
   const imageWrapper = createElement("div", { className: "post-image-wrapper" });
+  protectMediaShell(imageWrapper);
+  const imageFrame = createElement("button", {
+    className: "post-image-frame",
+    type: "button",
+    attributes: {
+      "aria-label": "Open full post image",
+      title: "Open full post image"
+    }
+  });
   const image = document.createElement("img");
+  const actions = createElement("div", {
+    className: "post-image-actions"
+  });
+  const viewBtn = createElement("button", {
+    className: "secondary-btn post-image-view-btn",
+    type: "button",
+    attributes: {
+      "aria-label": "View full image",
+      title: "View full image"
+    }
+  });
+  const viewLabel = createElement("span", {
+    className: "post-image-view-label",
+    text: "View full"
+  });
+
+  const openViewer = () => {
+    showPostImageViewer({
+      imageUrl: normalizedImageUrl,
+      authorName
+    });
+  };
 
   image.className = "post-image";
-  image.src = imageUrl;
   image.alt = "Post image";
   image.loading = "lazy";
   image.referrerPolicy = "no-referrer";
+  protectImageElement(image);
 
   image.addEventListener("error", () => {
     imageWrapper.remove();
   });
 
-  imageWrapper.appendChild(image);
+  image.src = normalizedImageUrl;
+  imageFrame.addEventListener("click", openViewer);
+  viewBtn.addEventListener("click", openViewer);
+  viewBtn.append(createPostImageViewerIcon("eye"), viewLabel);
+  imageFrame.appendChild(image);
+  actions.appendChild(viewBtn);
+  imageWrapper.append(imageFrame, actions);
   return imageWrapper;
+}
+
+function showPostImageViewer({ imageUrl = "", authorName = "" } = {}) {
+  const normalizedImageUrl = resolveApiAssetUrl(imageUrl);
+
+  if (!normalizedImageUrl) {
+    return () => {};
+  }
+
+  document.body.classList.remove("post-image-viewer-open");
+  document.getElementById(POST_IMAGE_VIEWER_ROOT_ID)?.remove();
+  document.body.classList.add("post-image-viewer-open");
+
+  const root = createElement("div", {
+    className: "post-image-viewer-root",
+    attributes: {
+      id: POST_IMAGE_VIEWER_ROOT_ID
+    }
+  });
+  const overlay = createElement("button", {
+    className: "post-image-viewer-overlay",
+    type: "button",
+    attributes: {
+      "aria-label": "Close image viewer"
+    }
+  });
+  const container = createElement("div", {
+    className: "post-image-viewer-container"
+  });
+  const card = createElement("section", {
+    className: "post-image-viewer-card",
+    attributes: {
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": authorName ? `Post image from ${authorName}` : "Post image"
+    }
+  });
+  const header = createElement("div", {
+    className: "post-image-viewer-header"
+  });
+  const controls = createElement("div", {
+    className: "post-image-viewer-controls"
+  });
+  const zoomOutBtn = createElement("button", {
+    className: "secondary-btn post-image-viewer-zoom-btn",
+    type: "button",
+    text: "-",
+    attributes: {
+      "aria-label": "Zoom out",
+      title: "Zoom out"
+    }
+  });
+  const zoomResetBtn = createElement("button", {
+    className: "secondary-btn post-image-viewer-zoom-readout",
+    type: "button",
+    text: "100%",
+    attributes: {
+      "aria-label": "Fit image to viewport",
+      title: "Fit image to viewport"
+    }
+  });
+  const zoomInBtn = createElement("button", {
+    className: "secondary-btn post-image-viewer-zoom-btn",
+    type: "button",
+    text: "+",
+    attributes: {
+      "aria-label": "Zoom in",
+      title: "Zoom in"
+    }
+  });
+  const closeBtn = createElement("button", {
+    className: "post-image-viewer-close-btn",
+    type: "button",
+    attributes: {
+      "aria-label": "Close image viewer",
+      title: "Close image viewer"
+    }
+  });
+  const frame = createElement("div", {
+    className: "post-image-viewer-frame"
+  });
+  protectMediaShell(frame);
+  const canvas = createElement("div", {
+    className: "post-image-viewer-canvas"
+  });
+  const image = document.createElement("img");
+  let naturalWidth = 0;
+  let naturalHeight = 0;
+  let zoomLevel = 1;
+  let fitZoomLevel = 1;
+
+  image.className = "post-image-viewer-image";
+  image.alt = authorName ? `Post image from ${authorName}` : "Post image";
+  image.decoding = "async";
+  image.loading = "eager";
+  image.referrerPolicy = "no-referrer";
+  protectImageElement(image);
+
+  const clampZoom = (nextZoom) =>
+    Math.min(POST_IMAGE_VIEWER_ZOOM_MAX, Math.max(POST_IMAGE_VIEWER_ZOOM_MIN, nextZoom));
+
+  const getFrameInnerWidth = () => {
+    const styles = window.getComputedStyle(frame);
+    const paddingLeft = Number.parseFloat(styles.paddingLeft || "0") || 0;
+    const paddingRight = Number.parseFloat(styles.paddingRight || "0") || 0;
+    return Math.max(1, frame.clientWidth - paddingLeft - paddingRight);
+  };
+
+  const calculateFitZoomLevel = () => {
+    if (naturalWidth <= 0) {
+      return 1;
+    }
+
+    return clampZoom(getFrameInnerWidth() / naturalWidth);
+  };
+
+  const syncZoomControls = () => {
+    zoomResetBtn.textContent = `${Math.round(zoomLevel * 100)}%`;
+    zoomOutBtn.disabled = zoomLevel <= POST_IMAGE_VIEWER_ZOOM_MIN;
+    zoomInBtn.disabled = zoomLevel >= POST_IMAGE_VIEWER_ZOOM_MAX;
+  };
+
+  const applyZoom = (nextZoom, { preserveViewport = true } = {}) => {
+    const clampedZoom = clampZoom(nextZoom);
+    const previousZoom = zoomLevel;
+
+    zoomLevel = clampedZoom;
+
+    if (naturalWidth > 0 && naturalHeight > 0) {
+      const viewportCenter = preserveViewport
+        ? {
+            x: frame.scrollLeft + frame.clientWidth / 2,
+            y: frame.scrollTop + frame.clientHeight / 2
+          }
+        : null;
+      const scaleRatio = previousZoom > 0 ? zoomLevel / previousZoom : 1;
+
+      canvas.style.width = `${Math.max(1, Math.round(naturalWidth * zoomLevel))}px`;
+      canvas.style.height = `${Math.max(1, Math.round(naturalHeight * zoomLevel))}px`;
+
+      if (viewportCenter && scaleRatio > 0) {
+        window.requestAnimationFrame(() => {
+          frame.scrollLeft = Math.max(
+            0,
+            viewportCenter.x * scaleRatio - frame.clientWidth / 2
+          );
+          frame.scrollTop = Math.max(
+            0,
+            viewportCenter.y * scaleRatio - frame.clientHeight / 2
+          );
+        });
+      }
+    }
+
+    syncZoomControls();
+  };
+
+  image.addEventListener("load", () => {
+    naturalWidth = image.naturalWidth || 0;
+    naturalHeight = image.naturalHeight || 0;
+    fitZoomLevel = calculateFitZoomLevel();
+    applyZoom(fitZoomLevel, {
+      preserveViewport: false
+    });
+  });
+
+  closeBtn.appendChild(createPostImageViewerIcon("close"));
+  controls.append(zoomOutBtn, zoomResetBtn, zoomInBtn);
+  header.append(controls, closeBtn);
+  canvas.appendChild(image);
+  frame.appendChild(canvas);
+  card.append(header, frame);
+  container.appendChild(card);
+  root.append(overlay, container);
+
+  let closed = false;
+
+  const closeViewer = () => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    document.body.classList.remove("post-image-viewer-open");
+    document.removeEventListener("keydown", handleKeyDown);
+    root.remove();
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeViewer();
+      return;
+    }
+
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      applyZoom(zoomLevel + POST_IMAGE_VIEWER_ZOOM_STEP);
+      return;
+    }
+
+    if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      applyZoom(zoomLevel - POST_IMAGE_VIEWER_ZOOM_STEP);
+      return;
+    }
+
+    if (event.key === "0") {
+      event.preventDefault();
+      applyZoom(fitZoomLevel);
+    }
+  };
+
+  image.addEventListener("error", () => {
+    showToast("Could not open the full image.", "error");
+    closeViewer();
+  });
+
+  document.body.appendChild(root);
+  zoomOutBtn.addEventListener("click", () => {
+    applyZoom(zoomLevel - POST_IMAGE_VIEWER_ZOOM_STEP);
+  });
+  zoomResetBtn.addEventListener("click", () => {
+    applyZoom(fitZoomLevel);
+  });
+  zoomInBtn.addEventListener("click", () => {
+    applyZoom(zoomLevel + POST_IMAGE_VIEWER_ZOOM_STEP);
+  });
+  frame.addEventListener(
+    "wheel",
+    (event) => {
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+
+      event.preventDefault();
+      applyZoom(
+        zoomLevel + (event.deltaY < 0 ? POST_IMAGE_VIEWER_ZOOM_STEP : -POST_IMAGE_VIEWER_ZOOM_STEP)
+      );
+    },
+    { passive: false }
+  );
+  overlay.addEventListener("click", closeViewer);
+  container.addEventListener("click", (event) => {
+    if (event.target === container) {
+      closeViewer();
+    }
+  });
+  closeBtn.addEventListener("click", closeViewer);
+
+  syncZoomControls();
+  document.addEventListener("keydown", handleKeyDown);
+  image.src = normalizedImageUrl;
+
+  return closeViewer;
+}
+
+function createPostImageViewerIcon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("post-image-viewer-icon");
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.9");
+  path.setAttribute(
+    "d",
+    name === "close"
+      ? "M6 6l12 12M18 6 6 18"
+      : "M2.5 12s3.7-6 9.5-6 9.5 6 9.5 6-3.7 6-9.5 6-9.5-6-9.5-6Zm9.5 3.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"
+  );
+  svg.appendChild(path);
+
+  return svg;
 }
 
 function createReactionBar({
@@ -1967,21 +2315,31 @@ function openCommentActionSheet({
 
 async function shareCommentEntry(comment, author) {
   const authorName = author?.username || "Unknown User";
+  const shareUrl = buildShareableFeedUrl({
+    postId: comment?.postId || "",
+    focusCommentId: comment?.id || ""
+  });
   const shareText = comment?.content
     ? `${authorName}: ${comment.content}`
     : `${authorName} shared a voice note on Boitekong Pulse.`;
+  const shareMessage = buildShareClipboardText(
+    shareText,
+    shareUrl ? `Open this comment in Boitekong Pulse: ${shareUrl}` : ""
+  );
 
   try {
     if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      await navigator.share({
-        title: "Comment",
-        text: shareText
+      const shareData = await buildBrandedShareData({
+        title: `Comment from ${authorName}`,
+        text: shareMessage,
+        url: shareUrl
       });
+      await navigator.share(shareData);
       return;
     }
 
     if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(shareText);
+      await navigator.clipboard.writeText(shareMessage);
       showToast("Comment copied to clipboard.", "success");
       return;
     }

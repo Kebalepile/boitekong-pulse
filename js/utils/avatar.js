@@ -1,4 +1,5 @@
 import { createElement } from "./dom.js";
+import { protectImageElement, protectMediaShell } from "./protectedMedia.js";
 
 const AVATAR_PALETTE = [
   { background: "linear-gradient(180deg, #dbeafe 0%, #bfdbfe 100%)", color: "#1d4ed8" },
@@ -12,6 +13,7 @@ export function createAvatarElement(user, { size = "md", className = "", decorat
   const avatar = createElement("div", {
     className: `avatar avatar-${size}${className ? ` ${className}` : ""}`
   });
+  protectMediaShell(avatar);
 
   const avatarSource =
     typeof user?.avatarUrl === "string" && user.avatarUrl
@@ -27,6 +29,7 @@ export function createAvatarElement(user, { size = "md", className = "", decorat
     image.src = avatarSource;
     image.alt = decorative ? "" : avatarLabel;
     image.loading = "lazy";
+    protectImageElement(image);
 
     if (decorative) {
       image.setAttribute("aria-hidden", "true");

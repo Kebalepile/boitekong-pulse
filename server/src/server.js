@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
 import {
+  closeDatabaseConnections,
   connectToDatabase,
   initializeDatabaseStructure
 } from "./config/database.js";
@@ -18,13 +19,17 @@ async function startServer() {
 
   const app = createApp();
   server = createServer(app);
+  server.requestTimeout = env.requestTimeoutMs;
+  server.headersTimeout = env.headersTimeoutMs;
+  server.keepAliveTimeout = env.keepAliveTimeoutMs;
   attachRealtimeServer(server);
 
   server.listen(env.port, () => {
     console.log(`Boitekong Pulse API listening on port ${env.port}`);
-    console.log(
-      `MongoDB connected to ${databaseSummary.databaseName} with ${databaseSummary.collections.length} collections ready.`
-    );
+    const topologyLabel = databaseSummary.databases
+      .map((database) => `${database.alias}:${database.databaseName}`)
+      .join(", ");
+    console.log(`MongoDB ready across ${topologyLabel}.`);
   });
 }
 
@@ -34,11 +39,14 @@ async function shutdown(signal) {
   if (server) {
     server.close(() => {
       console.log(`Received ${signal}. Server closed.`);
-      process.exit(0);
+      void closeDatabaseConnections().finally(() => {
+        process.exit(0);
+      });
     });
     return;
   }
 
+  await closeDatabaseConnections();
   process.exit(0);
 }
 

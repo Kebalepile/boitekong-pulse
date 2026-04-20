@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  bindConnectionModel,
+  createUnboundModelPlaceholder
+} from "./modelBinding.js";
 
 const { Schema } = mongoose;
 
@@ -71,4 +75,12 @@ reportSchema.index(
 
 reportSchema.index({ status: 1, createdAt: -1 });
 
-export const Report = mongoose.model("Report", reportSchema);
+export let Report = createUnboundModelPlaceholder({
+  modelName: "Report",
+  collectionName: "reports"
+});
+
+export function bindReportModel(connection) {
+  Report = bindConnectionModel(connection, "Report", reportSchema);
+  return Report;
+}

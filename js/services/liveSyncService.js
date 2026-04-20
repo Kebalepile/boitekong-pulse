@@ -143,7 +143,13 @@ function createRealtimeSocketUrl() {
   const apiBaseUrl = getApiBaseUrl();
 
   try {
-    const realtimeUrl = new URL(apiBaseUrl);
+    const browserOrigin =
+      typeof window !== "undefined" &&
+      window.location &&
+      (window.location.protocol === "http:" || window.location.protocol === "https:")
+        ? window.location.origin
+        : "http://127.0.0.1";
+    const realtimeUrl = new URL(apiBaseUrl, browserOrigin);
     realtimeUrl.protocol = realtimeUrl.protocol === "https:" ? "wss:" : "ws:";
     realtimeUrl.pathname = `${realtimeUrl.pathname.replace(/\/+$/, "")}/realtime`;
     realtimeUrl.search = new URLSearchParams({

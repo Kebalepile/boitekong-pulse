@@ -1,6 +1,7 @@
 import { clearFormErrors, createElement, createFieldError, setFieldError } from "../utils/dom.js";
 import { compressImageFile } from "../utils/imageCompression.js";
 import { MAX_POST_IMAGE_BYTES, validatePostImageFile } from "../utils/validators.js";
+import { protectImageElement, protectMediaShell } from "../utils/protectedMedia.js";
 
 export function createPostImageField({
   form,
@@ -11,6 +12,7 @@ export function createPostImageField({
   const state = {
     dataUrl: typeof initialImage === "string" ? initialImage.trim() : "",
     pending: false,
+    failedPreviewSrc: "",
     requestToken: 0
   };
 
@@ -44,15 +46,19 @@ export function createPostImageField({
   const previewShell = createElement("div", {
     className: "post-image-wrapper image-upload-preview-shell post-image-preview-shell-compact"
   });
+  protectMediaShell(previewShell);
   const previewImage = document.createElement("img");
   const error = createFieldError(inputId);
 
   triggerBtn.appendChild(createPostImagePickerIcon());
 
   previewImage.className = "post-image image-upload-preview-image";
-  previewImage.alt = "Post image preview";
+  previewImage.alt = "";
+  previewImage.setAttribute("aria-hidden", "true");
   previewImage.loading = "lazy";
+  previewImage.decoding = "async";
   previewImage.referrerPolicy = "no-referrer";
+  protectImageElement(previewImage);
   previewShell.appendChild(previewImage);
 
   const syncPreview = () => {
@@ -62,13 +68,28 @@ export function createPostImageField({
     triggerBtn.setAttribute("title", triggerText);
 
     if (!state.dataUrl) {
+      state.failedPreviewSrc = "";
+      previewImage.hidden = true;
       previewImage.removeAttribute("src");
+      previewImage.removeAttribute("data-preview-src");
       previewShell.hidden = true;
       removeBtn.disabled = state.pending;
       removeBtn.hidden = true;
       return;
     }
 
+    if (state.failedPreviewSrc === state.dataUrl) {
+      previewImage.hidden = true;
+      previewImage.removeAttribute("src");
+      previewImage.removeAttribute("data-preview-src");
+      previewShell.hidden = true;
+      removeBtn.disabled = state.pending;
+      removeBtn.hidden = false;
+      return;
+    }
+
+    previewImage.setAttribute("data-preview-src", state.dataUrl);
+    previewImage.hidden = false;
     previewImage.src = state.dataUrl;
     previewShell.hidden = false;
     removeBtn.disabled = state.pending;
@@ -93,10 +114,41 @@ export function createPostImageField({
     state.requestToken += 1;
     state.pending = false;
     state.dataUrl = "";
+    state.failedPreviewSrc = "";
     input.value = "";
     syncPendingState();
     syncPreview();
   };
+
+  previewImage.addEventListener("load", () => {
+    if (previewImage.getAttribute("data-preview-src") !== state.dataUrl) {
+      return;
+    }
+
+    state.failedPreviewSrc = "";
+  });
+
+  previewImage.addEventListener("error", () => {
+    const activePreviewSrc = previewImage.getAttribute("data-preview-src");
+
+    if (!state.dataUrl || activePreviewSrc !== state.dataUrl) {
+      return;
+    }
+
+    state.failedPreviewSrc = state.dataUrl;
+    previewImage.hidden = true;
+    previewImage.removeAttribute("src");
+    previewImage.removeAttribute("data-preview-src");
+    previewShell.hidden = true;
+    removeBtn.disabled = state.pending;
+    removeBtn.hidden = false;
+    setFieldError(
+      inputId,
+      state.dataUrl.startsWith("data:")
+        ? "Could not preview that image. Try another one."
+        : "Could not load the current image. Choose another image or remove it."
+    );
+  });
 
   triggerBtn.addEventListener("click", () => {
     input.click();
@@ -130,6 +182,7 @@ export function createPostImageField({
         return;
       }
 
+      state.failedPreviewSrc = "";
       state.dataUrl = optimizedImage.dataUrl;
       state.pending = false;
       syncPendingState();
@@ -162,6 +215,7 @@ export function createPostImageField({
     control,
     clear,
     getValue: () => state.dataUrl,
+    hasPreviewError: () => Boolean(state.failedPreviewSrc),
     isProcessing: () => state.pending
   };
 }
