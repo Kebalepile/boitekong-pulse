@@ -27,6 +27,10 @@ function normalizeMimeType(value = "") {
     .toLowerCase();
 }
 
+export function normalizeAvatarUploadMimeType(value = "") {
+  return normalizeMimeType(value);
+}
+
 function getStoredAvatarFilePath(avatarUrl = "") {
   const trimmedAvatarUrl = String(avatarUrl || "").trim();
 
@@ -64,11 +68,7 @@ export function getAvatarUploadsDirectory() {
   return avatarUploadsDirectory;
 }
 
-export async function storeAvatarUpload({
-  userId,
-  fileBuffer,
-  mimeType
-}) {
+export function createInlineAvatarDataUrl({ fileBuffer, mimeType } = {}) {
   const safeMimeType = normalizeMimeType(mimeType);
 
   if (!Buffer.isBuffer(fileBuffer) || fileBuffer.length === 0) {
@@ -94,6 +94,20 @@ export async function storeAvatarUpload({
       field: "avatar"
     });
   }
+
+  return `data:${safeMimeType};base64,${fileBuffer.toString("base64")}`;
+}
+
+export async function storeAvatarUpload({
+  userId,
+  fileBuffer,
+  mimeType
+}) {
+  const safeMimeType = normalizeMimeType(mimeType);
+  createInlineAvatarDataUrl({
+    fileBuffer,
+    mimeType: safeMimeType
+  });
 
   await ensureAvatarUploadsDirectory();
 

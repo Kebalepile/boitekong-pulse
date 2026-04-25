@@ -3,8 +3,8 @@ import { Notification } from "../models/Notification.js";
 import { User } from "../models/User.js";
 import { AppError } from "../utils/appError.js";
 import {
-  deleteStoredAvatar,
-  storeAvatarUpload
+  createInlineAvatarDataUrl,
+  deleteStoredAvatar
 } from "../utils/avatarUploads.js";
 import { normalizeDirectMessageEncryptionRecord } from "../utils/directMessageEncryption.js";
 import { publishToUser } from "./realtimeService.js";
@@ -389,19 +389,13 @@ export async function updateUserProfile(userId, payload = {}) {
 export async function updateUserAvatar(userId, { fileBuffer, mimeType } = {}) {
   const user = await requireUser(userId);
   const previousAvatarUrl = user.avatarUrl || "";
-  const nextAvatarUrl = await storeAvatarUpload({
-    userId: user._id,
+  const nextAvatarUrl = createInlineAvatarDataUrl({
     fileBuffer,
     mimeType
   });
 
-  try {
-    user.avatarUrl = nextAvatarUrl;
-    await user.save();
-  } catch (error) {
-    await deleteStoredAvatar(nextAvatarUrl);
-    throw error;
-  }
+  user.avatarUrl = nextAvatarUrl;
+  await user.save();
 
   if (previousAvatarUrl && previousAvatarUrl !== nextAvatarUrl) {
     await deleteStoredAvatar(previousAvatarUrl);
