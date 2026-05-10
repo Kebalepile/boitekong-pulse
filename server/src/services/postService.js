@@ -132,10 +132,20 @@ function serializeUserPreview(user) {
     username: user.username,
     avatarUrl: user.avatarUrl || "",
     avatarDataUrl: user.avatarUrl || "",
-    location: {
-      township: user.location?.township || "",
-      extension: user.location?.extension || ""
-    }
+    location: serializeLocation(user.location)
+  };
+}
+
+function serializeLocation(location = {}) {
+  const area = location.area || location.extension || "";
+
+  return {
+    province: location.province || "",
+    municipality: location.municipality || "",
+    township: location.township || "",
+    extension: location.extension || area,
+    area,
+    streetName: ""
   };
 }
 
@@ -167,10 +177,7 @@ function serializePost(post, comments, usersById) {
     content: post.content || "",
     image: post.imageUrl || "",
     imageUrl: post.imageUrl || "",
-    location: {
-      township: post.location?.township || "",
-      extension: post.location?.extension || ""
-    },
+    location: serializeLocation(post.location),
     voiceNote: serializeVoiceNote(post.voiceNote),
     reactions: serializeReactionRecord(post.reactions),
     comments,
@@ -521,10 +528,7 @@ export async function createPost({
       content: safePost.content,
       imageUrl: safeImageUrl,
       voiceNote: normalizedVoiceNote,
-      location: {
-        township: currentUser.location.township,
-        extension: currentUser.location.extension
-      }
+      location: serializeLocation(currentUser.location)
     });
   } catch (error) {
     if (safeClientRequestId && isClientRequestIdDuplicateError(error)) {
@@ -580,8 +584,11 @@ export async function searchPosts({ query, limit } = {}) {
   const matchingUsers = await User.find({
     $or: [
       { username: { $regex: safeRegex } },
+      { "location.province": { $regex: safeRegex } },
+      { "location.municipality": { $regex: safeRegex } },
       { "location.township": { $regex: safeRegex } },
-      { "location.extension": { $regex: safeRegex } }
+      { "location.extension": { $regex: safeRegex } },
+      { "location.area": { $regex: safeRegex } }
     ]
   })
     .select("_id")
@@ -591,8 +598,11 @@ export async function searchPosts({ query, limit } = {}) {
     status: "active",
     $or: [
       { content: { $regex: safeRegex } },
+      { "location.province": { $regex: safeRegex } },
+      { "location.municipality": { $regex: safeRegex } },
       { "location.township": { $regex: safeRegex } },
       { "location.extension": { $regex: safeRegex } },
+      { "location.area": { $regex: safeRegex } },
       ...(matchingUserIds.length > 0 ? [{ userId: { $in: matchingUserIds } }] : [])
     ]
   }).sort({ createdAt: -1 });

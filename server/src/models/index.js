@@ -6,6 +6,7 @@ import {
   bindOtpVerificationModel,
   OtpVerification
 } from "./OtpVerification.js";
+import { bindLiveStreamModel, LiveStream } from "./LiveStream.js";
 import { bindPostModel, Post } from "./Post.js";
 import { bindReportModel, Report } from "./Report.js";
 import { bindUserModel, User } from "./User.js";
@@ -41,6 +42,12 @@ const modelBindingDescriptors = [
     databaseAlias: DATABASE_ALIASES.CONTENT,
     bind: bindPostModel,
     getModel: () => Post
+  },
+  {
+    modelName: "LiveStream",
+    databaseAlias: DATABASE_ALIASES.CONTENT,
+    bind: bindLiveStreamModel,
+    getModel: () => LiveStream
   },
   {
     modelName: "Comment",

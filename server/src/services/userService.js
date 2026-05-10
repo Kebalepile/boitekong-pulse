@@ -10,14 +10,31 @@ import { normalizeDirectMessageEncryptionRecord } from "../utils/directMessageEn
 import { publishToUser } from "./realtimeService.js";
 import {
   normalizeAvatarUrl,
+  validateArea,
   validateBoolean,
   validateCurrentPassword,
   validateExtension,
+  validateMunicipality,
   validatePasswordConfirmation,
+  validateProvince,
   validateRequiredPhoneNumber,
+  validateStreetName,
   validateTownship,
   validateUsername
 } from "../utils/validators.js";
+
+function serializeLocation(location = {}, { includeStreetName = false } = {}) {
+  const area = location.area || location.extension || "";
+
+  return {
+    province: location.province || "",
+    municipality: location.municipality || "",
+    township: location.township || "",
+    extension: location.extension || area,
+    area,
+    streetName: includeStreetName ? location.streetName || "" : ""
+  };
+}
 
 function hasId(list, targetId) {
   return list.some((value) => String(value) === String(targetId));
@@ -146,10 +163,9 @@ export function serializeUser(user, options = {}) {
     username: user.username,
     phoneNumber: user.phoneNumber,
     avatarUrl: user.avatarUrl || "",
-    location: {
-      township: user.location?.township || "",
-      extension: user.location?.extension || ""
-    },
+    location: serializeLocation(user.location, {
+      includeStreetName: includePrivateEncryption
+    }),
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
     directMessageEncryption: serializedDirectMessageEncryption,
@@ -217,8 +233,11 @@ export async function searchUsers(query, { limit } = {}) {
     ? {
         $or: [
           { username: { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
+          { "location.province": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
+          { "location.municipality": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
           { "location.township": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
-          { "location.extension": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } }
+          { "location.extension": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } },
+          { "location.area": { $regex: new RegExp(escapeRegex(normalizedQuery), "i") } }
         ]
       }
     : {};
@@ -279,6 +298,22 @@ export async function updateUserProfile(userId, payload = {}) {
     payload.extension === undefined
       ? user.location?.extension
       : validateExtension(payload.extension);
+  const safeProvince =
+    payload.province === undefined
+      ? user.location?.province || ""
+      : validateProvince(payload.province);
+  const safeMunicipality =
+    payload.municipality === undefined
+      ? user.location?.municipality || ""
+      : validateMunicipality(payload.municipality);
+  const safeArea =
+    payload.area === undefined
+      ? user.location?.area || safeExtension
+      : validateArea(payload.area);
+  const safeStreetName =
+    payload.streetName === undefined
+      ? user.location?.streetName || ""
+      : validateStreetName(payload.streetName);
   const safeAvatarUrl =
     payload.avatarUrl === undefined
       ? user.avatarUrl || ""
@@ -363,8 +398,12 @@ export async function updateUserProfile(userId, payload = {}) {
   user.phoneVerified =
     previousPhoneNumber === safePhoneNumber ? user.phoneVerified === true : false;
   user.location = {
+    province: safeProvince,
+    municipality: safeMunicipality,
     township: safeTownship,
-    extension: safeExtension
+    extension: safeExtension,
+    area: safeArea,
+    streetName: safeStreetName
   };
 
   if (wantsDirectMessageEncryptionUpdate) {

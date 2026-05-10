@@ -41,24 +41,41 @@ function getExpiryDate(now = Date.now()) {
   return new Date(now + env.otpExpiresInMinutes * 60 * 1000);
 }
 
-function getCooldownDate(now = Date.now()) {
-  return new Date(now + env.otpResendCooldownSeconds * 1000);
-}
-
 function getPasswordResetExpiryDate(now = Date.now()) {
   return new Date(now + PASSWORD_RESET_OTP_EXPIRES_IN_MINUTES * 60 * 1000);
 }
 
+function isActiveUnverifiedOtp(otpRecord, now = Date.now()) {
+  return Boolean(
+    otpRecord &&
+      !otpRecord.verifiedAt &&
+      otpRecord.expiresAt &&
+      otpRecord.expiresAt.getTime() > now
+  );
+}
+
+function throwActiveOtpError(message, { field = null, otpRecord }) {
+  throw new AppError(message, {
+    statusCode: 429,
+    code: "OTP_COOLDOWN_ACTIVE",
+    ...(field ? { field } : {}),
+    details: {
+      expiresAt: otpRecord.expiresAt,
+      cooldownUntil: otpRecord.expiresAt
+    }
+  });
+}
+
 function buildOtpMessage(code) {
-  return `Boitekong Pulse verification code: ${code}. It expires in ${env.otpExpiresInMinutes} minute(s).`;
+  return `yahneh verification code: ${code}. It expires in ${env.otpExpiresInMinutes} minute(s).`;
 }
 
 function buildPasswordResetOtpMessage(code) {
-  return `Boitekong Pulse password reset code: ${code}. It expires in ${PASSWORD_RESET_OTP_EXPIRES_IN_MINUTES} minute(s).`;
+  return `yahneh password reset code: ${code}. It expires in ${PASSWORD_RESET_OTP_EXPIRES_IN_MINUTES} minute(s).`;
 }
 
 function buildRegistrationOtpMessage(code) {
-  return `Boitekong Pulse signup code: ${code}. Enter it to finish creating your account. It expires in ${env.otpExpiresInMinutes} minute(s).`;
+  return `yahneh signup code: ${code}. Enter it to finish creating your account. It expires in ${env.otpExpiresInMinutes} minute(s).`;
 }
 
 async function requireUser(userId) {
@@ -133,18 +150,9 @@ export async function sendPhoneVerificationOtp({ userId }) {
   });
   const now = Date.now();
 
-  if (
-    existingOtp &&
-    existingOtp.verifiedAt === null &&
-    existingOtp.cooldownUntil &&
-    existingOtp.cooldownUntil.getTime() > now
-  ) {
-    throw new AppError("Please wait before requesting another OTP.", {
-      statusCode: 429,
-      code: "OTP_COOLDOWN_ACTIVE",
-      details: {
-        cooldownUntil: existingOtp.cooldownUntil
-      }
+  if (isActiveUnverifiedOtp(existingOtp, now)) {
+    throwActiveOtpError("This code is still active. Wait for it to expire before requesting another OTP.", {
+      otpRecord: existingOtp
     });
   }
 
@@ -163,7 +171,7 @@ export async function sendPhoneVerificationOtp({ userId }) {
   otpRecord.expiresAt = getExpiryDate(now);
   otpRecord.verifiedAt = null;
   otpRecord.attemptCount = 0;
-  otpRecord.cooldownUntil = getCooldownDate(now);
+  otpRecord.cooldownUntil = otpRecord.expiresAt;
 
   await otpRecord.save();
   await sendSms({
@@ -191,20 +199,10 @@ export async function requestRegistrationOtp(payload = {}) {
   });
   const now = Date.now();
 
-  if (
-    existingOtp &&
-    existingOtp.verifiedAt === null &&
-    existingOtp.cooldownUntil &&
-    existingOtp.cooldownUntil.getTime() > now
-  ) {
-    throw new AppError("Please wait before requesting another signup code.", {
-      statusCode: 429,
-      code: "OTP_COOLDOWN_ACTIVE",
+  if (isActiveUnverifiedOtp(existingOtp, now)) {
+    throwActiveOtpError("This signup code is still active. Wait for it to expire before requesting another code.", {
       field: "phoneNumber",
-      details: {
-        cooldownUntil: existingOtp.cooldownUntil,
-        expiresAt: existingOtp.expiresAt
-      }
+      otpRecord: existingOtp
     });
   }
 
@@ -223,7 +221,7 @@ export async function requestRegistrationOtp(payload = {}) {
   otpRecord.expiresAt = getExpiryDate(now);
   otpRecord.verifiedAt = null;
   otpRecord.attemptCount = 0;
-  otpRecord.cooldownUntil = getCooldownDate(now);
+  otpRecord.cooldownUntil = otpRecord.expiresAt;
 
   await otpRecord.save();
   await sendSms({
@@ -437,19 +435,10 @@ export async function sendPasswordResetOtp({ phoneNumber }) {
   });
   const now = Date.now();
 
-  if (
-    existingOtp &&
-    existingOtp.verifiedAt === null &&
-    existingOtp.cooldownUntil &&
-    existingOtp.cooldownUntil.getTime() > now
-  ) {
-    throw new AppError("Please wait before requesting another OTP.", {
-      statusCode: 429,
-      code: "OTP_COOLDOWN_ACTIVE",
+  if (isActiveUnverifiedOtp(existingOtp, now)) {
+    throwActiveOtpError("This reset code is still active. Wait for it to expire before requesting another OTP.", {
       field: "phoneNumber",
-      details: {
-        cooldownUntil: existingOtp.cooldownUntil
-      }
+      otpRecord: existingOtp
     });
   }
 
@@ -469,7 +458,7 @@ export async function sendPasswordResetOtp({ phoneNumber }) {
   otpRecord.expiresAt = getPasswordResetExpiryDate(now);
   otpRecord.verifiedAt = null;
   otpRecord.attemptCount = 0;
-  otpRecord.cooldownUntil = getCooldownDate(now);
+  otpRecord.cooldownUntil = otpRecord.expiresAt;
 
   await otpRecord.save();
   await sendSms({

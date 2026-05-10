@@ -4,9 +4,13 @@ import { AppError } from "../utils/appError.js";
 import { signAccessToken } from "../utils/token.js";
 import {
   validateExtension,
+  validateArea,
   validateLoginPassword,
+  validateLocationPart,
   validatePasswordConfirmation,
+  validateProvince,
   validateRequiredPhoneNumber,
+  validateStreetName,
   validateTownship,
   validateUsername
 } from "../utils/validators.js";
@@ -38,15 +42,37 @@ export async function assertRegistrationAvailability({ username, phoneNumber }) 
 export function validateRegistrationPayload(payload = {}) {
   const safeUsername = validateUsername(payload.username);
   const safePhoneNumber = validateRequiredPhoneNumber(payload.phoneNumber);
+  const safeProvince = validateProvince(payload.province);
+  const safeMunicipality = validateLocationPart(
+    payload.municipality,
+    "municipality",
+    "Municipality",
+    { required: true }
+  );
   const safeTownship = validateTownship(payload.township);
   const safeExtension = validateExtension(payload.extension);
+
+  if (!safeExtension) {
+    throw new AppError("Extension is required.", {
+      statusCode: 400,
+      code: "EXTENSION_REQUIRED",
+      field: "extension"
+    });
+  }
+
+  const safeArea = payload.area ? validateArea(payload.area) : safeExtension;
+  const safeStreetName = validateStreetName(payload.streetName);
   const safePassword = validatePasswordConfirmation(payload.password, payload.confirmPassword);
 
   return {
     username: safeUsername,
     phoneNumber: safePhoneNumber,
+    province: safeProvince,
+    municipality: safeMunicipality,
     township: safeTownship,
     extension: safeExtension,
+    area: safeArea,
+    streetName: safeStreetName,
     password: safePassword
   };
 }
@@ -90,8 +116,12 @@ export async function registerUser(payload = {}, options = {}) {
     phoneNumber: registrationData.phoneNumber,
     passwordHash,
     location: {
+      province: registrationData.province,
+      municipality: registrationData.municipality,
       township: registrationData.township,
-      extension: registrationData.extension
+      extension: registrationData.extension,
+      area: registrationData.area,
+      streetName: registrationData.streetName
     },
     phoneVerified: options.phoneVerified === true
   });

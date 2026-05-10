@@ -4,6 +4,16 @@ const { Schema } = mongoose;
 
 export const locationSchema = new Schema(
   {
+    province: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    municipality: {
+      type: String,
+      default: "",
+      trim: true
+    },
     township: {
       type: String,
       required: true,
@@ -11,7 +21,17 @@ export const locationSchema = new Schema(
     },
     extension: {
       type: String,
-      required: true,
+      default: "",
+      trim: true
+    },
+    area: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    streetName: {
+      type: String,
+      default: "",
       trim: true
     }
   },

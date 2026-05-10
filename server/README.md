@@ -1,6 +1,6 @@
-# Boitekong Pulse API
+# yahneh API
 
-Boitekong Pulse now runs as a hybrid app: the frontend keeps lightweight browser caches, but the main app flows are already API-backed.
+yahneh runs as a hybrid app: the frontend keeps lightweight browser caches, but the main app flows are API-backed.
 
 ## Current scope
 

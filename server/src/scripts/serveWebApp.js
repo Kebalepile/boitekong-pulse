@@ -99,5 +99,5 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`Boitekong Pulse web app running at http://${host}:${port}`);
+  console.log(`yahneh web app running at http://${host}:${port}`);
 });

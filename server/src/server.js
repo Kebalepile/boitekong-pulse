@@ -25,7 +25,7 @@ async function startServer() {
   attachRealtimeServer(server);
 
   server.listen(env.port, () => {
-    console.log(`Boitekong Pulse API listening on port ${env.port}`);
+    console.log(`yahneh API listening on port ${env.port}`);
     const topologyLabel = databaseSummary.databases
       .map((database) => `${database.alias}:${database.databaseName}`)
       .join(", ");

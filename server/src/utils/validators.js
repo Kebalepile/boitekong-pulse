@@ -2,6 +2,7 @@ import { AppError } from "./appError.js";
 
 const TOWNSHIP_REGEX = /^(?=.{2,40}$)[A-Za-z]+(?:[ '-][A-Za-z]+)*$/;
 const EXTENSION_REGEX = /^(?=.{1,12}$)(?:Ext(?:ension)?\.?\s?\d{1,3}|\d{1,3})$/i;
+const LOCATION_PART_REGEX = /^(?=.{2,60}$)[A-Za-z0-9]+(?:[ .,'/-][A-Za-z0-9]+)*$/;
 const PHONE_REGEX = /^(?:\+?\d[\d -]{8,18}\d)$/;
 export const MAX_POST_CONTENT_LENGTH = 1000;
 export const MAX_COMMENT_LENGTH = 300;
@@ -133,6 +134,48 @@ export function validateTownship(value) {
   return normalized;
 }
 
+export function validateLocationPart(value, field, label, { required = false } = {}) {
+  const normalized = collapseWhitespace(value);
+
+  if (!normalized) {
+    if (required) {
+      throw makeValidationError(
+        `${field.toUpperCase()}_REQUIRED`,
+        field,
+        `${label} is required.`
+      );
+    }
+
+    return "";
+  }
+
+  if (!LOCATION_PART_REGEX.test(normalized)) {
+    throw makeValidationError(
+      `${field.toUpperCase()}_INVALID`,
+      field,
+      `${label} must be 2-60 characters and avoid exact house numbers.`
+    );
+  }
+
+  return normalized;
+}
+
+export function validateProvince(value) {
+  return validateLocationPart(value, "province", "Province", { required: true });
+}
+
+export function validateMunicipality(value) {
+  return validateLocationPart(value, "municipality", "Municipality or city/town");
+}
+
+export function validateArea(value) {
+  return validateLocationPart(value, "area", "Extension, section, or area");
+}
+
+export function validateStreetName(value) {
+  return validateLocationPart(value, "streetName", "Street name");
+}
+
 export function normalizeExtension(value) {
   const cleaned = collapseWhitespace(value);
 
@@ -148,6 +191,10 @@ export function normalizeExtension(value) {
 
 export function validateExtension(value) {
   const normalized = normalizeExtension(value);
+
+  if (!normalized) {
+    return "";
+  }
 
   if (!EXTENSION_REGEX.test(normalized)) {
     throw makeValidationError(

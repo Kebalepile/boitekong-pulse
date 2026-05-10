@@ -34,8 +34,12 @@ function serializeUserPreview(user) {
     avatarUrl: user.avatarUrl || "",
     avatarDataUrl: user.avatarUrl || "",
     location: {
+      province: user.location?.province || "",
+      municipality: user.location?.municipality || "",
       township: user.location?.township || "",
-      extension: user.location?.extension || ""
+      extension: user.location?.extension || user.location?.area || "",
+      area: user.location?.area || user.location?.extension || "",
+      streetName: ""
     },
     directMessagesEnabled: user.directMessagesEnabled !== false,
     notificationsEnabled: user.notificationsEnabled !== false,
