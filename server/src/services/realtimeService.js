@@ -30,7 +30,7 @@ const STREAM_REALTIME_TYPES = new Set([
   "stream:relay-fallback-request"
 ]);
 const MAX_STREAM_COMMENT_LENGTH = 500;
-const MAX_RELAY_CHUNK_LENGTH = 2000000;
+const MAX_RELAY_CHUNK_LENGTH = 1000000;
 const ALLOWED_STREAM_REACTIONS = new Set([
   "\u2764\uFE0F",
   "\uD83D\uDC4F",
@@ -115,13 +115,19 @@ function normalizeStreamRelayPayload(payload, basePayload) {
     ? payload.chunk.trim().replace(/[\r\n\s]/g, "")
     : "";
 
-  if (
-    !chunk ||
-    chunk.length > MAX_RELAY_CHUNK_LENGTH ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(chunk)
-  ) {
-    return null;
+      if (!chunk) {
+       return null;
   }
+   // Reject video chunks that exceed our size limit or contain invalid base64.
+    // Logging helps you see if oversize chunks are being dropped in production.
+    if (chunk.length > MAX_RELAY_CHUNK_LENGTH ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(chunk)) {
+      console.warn(
+        `Dropping oversize relay chunk (length=${chunk.length}) for stream=${basePayload.streamId}`
+      );
+      return null;
+    }
+
 
   return {
     ...basePayload,
