@@ -16,6 +16,7 @@ const relayStreams = new Map();
 const socketState = new WeakMap();
 const STREAM_REALTIME_TYPES = new Set([
   "stream:comment",
+  "stream:comment-moderation",
   "stream:reaction",
   "stream:offer",
   "stream:answer",
@@ -83,6 +84,23 @@ function normalizeStreamReactionPayload(payload, basePayload) {
   return {
     ...basePayload,
     reactionType
+  };
+}
+
+function normalizeStreamCommentModerationPayload(payload, basePayload) {
+  const targetUserId = trimString(payload.targetUserId);
+  const action = trimString(payload.action).toLowerCase();
+
+  if (!targetUserId || (action !== "like" && action !== "heart")) {
+    return null;
+  }
+
+  return {
+    ...basePayload,
+    targetUserId,
+    action,
+    streamerName: normalizePlainText(payload.streamerName, 30) || "Streamer",
+    text: normalizePlainText(payload.text, 120)
   };
 }
 
@@ -583,6 +601,10 @@ function normalizeClientRealtimePayload(connection, payload) {
     return normalizeStreamReactionPayload(payload, basePayload);
   }
 
+  if (type === "stream:comment-moderation") {
+    return normalizeStreamCommentModerationPayload(payload, basePayload);
+  }
+
   if (type.startsWith("stream:relay-")) {
     return normalizeStreamRelayPayload(payload, basePayload);
   }
@@ -713,6 +735,15 @@ async function handleClientMessage(connection, payloadBuffer) {
     (payload.type === "stream:comment" || payload.type === "stream:reaction") &&
     !(await canPublishStreamChatPayload(payload.streamId, connection.userId))
   ) {
+    return;
+  }
+
+  if (payload.type === "stream:comment-moderation") {
+    if (!(await isActiveStreamBroadcaster(payload.streamId, connection.userId))) {
+      return;
+    }
+
+    publishToUser(payload.targetUserId, payload);
     return;
   }
 

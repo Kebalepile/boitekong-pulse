@@ -10,6 +10,7 @@ import {
   muteLiveStreamViewer,
   startLiveStream,
   strikeLiveStreamViewer,
+  unmuteLiveStreamViewer,
   updateViewerCount
 } from "../controllers/liveStreamController.js";
 import { requireAuth } from "../middleware/auth.js";
@@ -27,6 +28,7 @@ router.post("/:streamId/join", joinLiveStream);
 router.post("/:streamId/leave", leaveLiveStream);
 router.post("/:streamId/viewers/:viewerId/strike", strikeLiveStreamViewer);
 router.post("/:streamId/viewers/:viewerId/mute", muteLiveStreamViewer);
+router.post("/:streamId/viewers/:viewerId/unmute", unmuteLiveStreamViewer);
 router.post("/:streamId/viewers/:viewerId/kick", kickLiveStreamViewer);
 router.patch("/:streamId/viewer-count", updateViewerCount);
 

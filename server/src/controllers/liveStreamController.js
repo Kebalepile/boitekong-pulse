@@ -495,6 +495,10 @@ async function moderateLiveStreamViewer(req, { action }) {
     moderation.mutedAt = moderation.mutedAt || new Date();
   }
 
+  if (action === "unmute") {
+    moderation.mutedAt = null;
+  }
+
   if (action === "kick") {
     moderation.kickedAt = moderation.kickedAt || new Date();
     stream.signalingTokens = stream.signalingTokens.filter(
@@ -506,11 +510,17 @@ async function moderateLiveStreamViewer(req, { action }) {
   await stream.save();
 
   const payload = {
-    type: action === "kick" ? "stream:kicked" : "stream:viewer-muted",
+    type:
+      action === "kick"
+        ? "stream:kicked"
+        : action === "unmute"
+          ? "stream:viewer-unmuted"
+          : "stream:viewer-muted",
     streamId: String(stream._id),
     targetUserId: String(viewerId),
     viewerId: String(viewerId),
     viewer: serializeBroadcaster(viewer),
+    streamerName: req.user.username || "Streamer",
     muted: Boolean(moderation.mutedAt),
     kicked: Boolean(moderation.kickedAt),
     viewerCount: stream.viewerCount,
@@ -529,6 +539,12 @@ async function moderateLiveStreamViewer(req, { action }) {
 
 export const muteLiveStreamViewer = asyncHandler(async (req, res) => {
   const result = await moderateLiveStreamViewer(req, { action: "mute" });
+
+  res.status(200).json(result);
+});
+
+export const unmuteLiveStreamViewer = asyncHandler(async (req, res) => {
+  const result = await moderateLiveStreamViewer(req, { action: "unmute" });
 
   res.status(200).json(result);
 });
